@@ -10,4 +10,5 @@ coverage/
 Thumbs.db
 .idea/
 .turbo/
+.cursor/
 prisma/migrations/**/migration_lock.toml
