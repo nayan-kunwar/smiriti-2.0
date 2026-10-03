@@ -2,7 +2,7 @@
 
 **Status**: Accepted  
 **Date**: 2026-08-01  
-**Deciders**: Engineering  
+**Deciders**: Engineering
 
 ## Context
 
@@ -19,10 +19,10 @@ Alternatives considered:
 
 Implement **`EmbeddingProvider` port** with two adapters from v1:
 
-| Environment | Provider | Model | Collection |
-| ----------- | -------- | ----- | ---------- |
-| Local / CI | Ollama | `nomic-embed-text` | `smriti_dev` (or per-developer) |
-| Production | OpenAI | `text-embedding-3-small` | `smriti_prod` |
+| Environment | Provider | Model                    | Collection                      |
+| ----------- | -------- | ------------------------ | ------------------------------- |
+| Local / CI  | Ollama   | `nomic-embed-text`       | `smriti_dev` (or per-developer) |
+| Production  | OpenAI   | `text-embedding-3-small` | `smriti_prod`                   |
 
 Selection via `EMBEDDING_PROVIDER=ollama|openai` validated at boot. **Fail fast** if provider is `openai` but `OPENAI_API_KEY` is missing.
 

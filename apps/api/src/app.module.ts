@@ -17,8 +17,7 @@ import { CorrelationIdMiddleware } from './common/middleware/correlation-id.midd
     LoggerModule.forRoot({
       pinoHttp: {
         level: process.env.LOG_LEVEL ?? 'info',
-        genReqId: (req) =>
-          (req.headers['x-correlation-id'] as string | undefined) ?? randomUUID(),
+        genReqId: (req) => (req.headers['x-correlation-id'] as string | undefined) ?? randomUUID(),
         customProps: (req) => ({
           correlationId: req.id,
         }),

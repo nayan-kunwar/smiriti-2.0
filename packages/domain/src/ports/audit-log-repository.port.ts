@@ -20,5 +20,7 @@ export interface ListAuditLogsQuery {
 
 export interface AuditLogRepository {
   append(entry: AuditLogEntry): Promise<void>;
-  findAll(query: ListAuditLogsQuery): Promise<{ items: AuditLogRecord[]; nextCursor: string | null }>;
+  findAll(
+    query: ListAuditLogsQuery,
+  ): Promise<{ items: AuditLogRecord[]; nextCursor: string | null }>;
 }

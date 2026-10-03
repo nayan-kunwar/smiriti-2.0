@@ -82,7 +82,10 @@ describe.skipIf(!dbAvailable)('Auth API (e2e)', () => {
   it('POST /v1/auth/login returns tokens', async () => {
     const response = await request(app.getHttpServer())
       .post('/v1/auth/login')
-      .send({ email: (await prisma.user.findUnique({ where: { id: userId } }))!.email, password: 'password123' })
+      .send({
+        email: (await prisma.user.findUnique({ where: { id: userId } }))!.email,
+        password: 'password123',
+      })
       .expect(200);
 
     expect(response.body.accessToken).toBeTruthy();
@@ -130,10 +133,7 @@ describe.skipIf(!dbAvailable)('Auth API (e2e)', () => {
   });
 
   it('POST /v1/auth/logout revokes refresh token', async () => {
-    await request(app.getHttpServer())
-      .post('/v1/auth/logout')
-      .send({ refreshToken })
-      .expect(204);
+    await request(app.getHttpServer()).post('/v1/auth/logout').send({ refreshToken }).expect(204);
   });
 });
 

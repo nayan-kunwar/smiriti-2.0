@@ -2,7 +2,7 @@
 
 **Status**: Accepted  
 **Date**: 2026-08-01  
-**Deciders**: Engineering  
+**Deciders**: Engineering
 
 ## Context
 
@@ -19,14 +19,14 @@ Alternatives considered:
 
 **v1 implements two memory types** sharing the same storage and indexing infrastructure:
 
-| Type | Purpose | v1 |
-| ---- | ------- | -- |
-| `long_term` | Stable user facts, preferences, biographical info | ✓ |
-| `semantic` | Conceptual knowledge, learned associations | ✓ |
-| `episodic` | Time-bound events and experiences | v2 |
-| `working` | Short-term session context | v2 |
-| `procedural` | How-to knowledge, workflows | v3 |
-| `knowledge_graph` | Cross-memory relationships | v3 |
+| Type              | Purpose                                           | v1  |
+| ----------------- | ------------------------------------------------- | --- |
+| `long_term`       | Stable user facts, preferences, biographical info | ✓   |
+| `semantic`        | Conceptual knowledge, learned associations        | ✓   |
+| `episodic`        | Time-bound events and experiences                 | v2  |
+| `working`         | Short-term session context                        | v2  |
+| `procedural`      | How-to knowledge, workflows                       | v3  |
+| `knowledge_graph` | Cross-memory relationships                        | v3  |
 
 Both v1 types use the same `memories` table with a `type` enum field. Retrieval, embedding, and CRUD pipelines are identical — type is metadata for filtering and agent behavior, not a separate storage engine.
 

@@ -1,4 +1,9 @@
-import type { AuditLogEntry, AuditLogRecord, AuditLogRepository, ListAuditLogsQuery } from '@smriti/domain';
+import type {
+  AuditLogEntry,
+  AuditLogRecord,
+  AuditLogRepository,
+  ListAuditLogsQuery,
+} from '@smriti/domain';
 import type { Prisma, PrismaClient } from '@prisma/client';
 
 export class PrismaAuditLogRepository implements AuditLogRepository {

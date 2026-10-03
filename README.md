@@ -55,12 +55,12 @@ docker/           Docker Compose and Dockerfiles
 
 ## Scripts
 
-| Command | Description |
-| ------- | ----------- |
-| `pnpm build` | Build all packages |
-| `pnpm test` | Run unit tests |
-| `pnpm lint` | ESLint |
-| `pnpm typecheck` | TypeScript check |
+| Command           | Description          |
+| ----------------- | -------------------- |
+| `pnpm build`      | Build all packages   |
+| `pnpm test`       | Run unit tests       |
+| `pnpm lint`       | ESLint               |
+| `pnpm typecheck`  | TypeScript check     |
 | `pnpm dev:worker` | Start worker process |
 
 ## Documentation

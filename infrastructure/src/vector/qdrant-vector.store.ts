@@ -86,24 +86,30 @@ export class QdrantVectorStore implements VectorStore {
         }),
       });
       if (!res.ok) throw new Error(`Qdrant scroll failed: ${res.status}`);
-      const json = (await res.json()) as { result: { points: Array<{ id: string }>; next_page_offset?: unknown } };
+      const json = (await res.json()) as {
+        result: { points: Array<{ id: string }>; next_page_offset?: unknown };
+      };
       for (const p of json.result.points) matched.push(p.id);
       if (json.result.next_page_offset == null) break;
       offset = json.result.next_page_offset;
     }
     // Also cover chunked ids stored as point id prefix but payload missed (defensive).
     if (matched.length === 0) return;
-    const del = await fetch(`${this.baseUrl}/collections/${this.collection}/points/delete?wait=true`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ points: matched }),
-    });
+    const del = await fetch(
+      `${this.baseUrl}/collections/${this.collection}/points/delete?wait=true`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ points: matched }),
+      },
+    );
     if (!del.ok) throw new Error(`Qdrant delete failed: ${del.status}`);
   }
 
   async search(params: VectorSearchParams): Promise<VectorSearchResult[]> {
     const must: unknown[] = [{ key: 'userId', match: { value: params.filter.userId } }];
-    if (params.filter.category) must.push({ key: 'category', match: { value: params.filter.category } });
+    if (params.filter.category)
+      must.push({ key: 'category', match: { value: params.filter.category } });
     if (params.filter.tags?.length) {
       for (const tag of params.filter.tags) must.push({ key: 'tags', match: { value: tag } });
     }
@@ -129,7 +135,11 @@ export class QdrantVectorStore implements VectorStore {
     });
     if (!res.ok) throw new Error(`Qdrant search failed: ${res.status}`);
     const json = (await res.json()) as {
-      result: Array<{ id: string; score: number; payload: { memoryId: string; chunkIndex: number } }>;
+      result: Array<{
+        id: string;
+        score: number;
+        payload: { memoryId: string; chunkIndex: number };
+      }>;
     };
     return json.result.map((r) => ({
       id: String(r.id),

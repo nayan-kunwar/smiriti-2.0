@@ -1,4 +1,9 @@
-import type { AuditLogRepository, ListAuditLogsQuery, ListUsersQuery, UserRepository } from '@smriti/domain';
+import type {
+  AuditLogRepository,
+  ListAuditLogsQuery,
+  ListUsersQuery,
+  UserRepository,
+} from '@smriti/domain';
 import { NotFoundError } from '@smriti/shared';
 import { toUserDto, type UserDto } from '../mappers/user.mapper.js';
 
@@ -52,10 +57,7 @@ export async function listAuditLogs(
   };
 }
 
-export async function validateApiKeyUser(
-  deps: ListUsersDeps,
-  userId: string,
-): Promise<UserDto> {
+export async function validateApiKeyUser(deps: ListUsersDeps, userId: string): Promise<UserDto> {
   const user = await deps.userRepository.findById(userId);
   if (!user) {
     throw new NotFoundError('User', userId);

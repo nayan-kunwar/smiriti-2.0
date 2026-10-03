@@ -14,24 +14,24 @@ Smriti is a production-grade agentic memory assistant. v1 delivers a REST API an
 
 ### 1.2 Actors
 
-| Actor | Description |
-| ----- | ----------- |
-| **End user** | Registers, authenticates, manages memories via REST or chat |
-| **API consumer** | External service using JWT or API key to call memory APIs |
-| **Admin** | RBAC `admin` role; views users and audit logs |
-| **Worker process** | BullMQ consumer for embedding, vector indexing, reconciliation |
-| **CI pipeline** | Runs tests and golden-dataset evals against docker-compose stack |
+| Actor              | Description                                                      |
+| ------------------ | ---------------------------------------------------------------- |
+| **End user**       | Registers, authenticates, manages memories via REST or chat      |
+| **API consumer**   | External service using JWT or API key to call memory APIs        |
+| **Admin**          | RBAC `admin` role; views users and audit logs                    |
+| **Worker process** | BullMQ consumer for embedding, vector indexing, reconciliation   |
+| **CI pipeline**    | Runs tests and golden-dataset evals against docker-compose stack |
 
 ### 1.3 External Dependencies
 
-| Dependency | Role | v1 usage |
-| ---------- | ---- | -------- |
-| **PostgreSQL** | Source of truth for users, memories, conversations, audit logs | Critical path |
-| **Redis** | BullMQ queue backend, rate limiting, session/cache | Critical path |
-| **Qdrant** | Vector store for semantic search | Critical path (async) |
-| **Ollama** | Local embedding + optional LLM in dev/CI | Dev/CI default |
-| **OpenAI** | Production embeddings + chat completion | Prod default |
-| **S3-compatible storage** | Conversation exports, eval artifacts | Non-critical path |
+| Dependency                | Role                                                           | v1 usage              |
+| ------------------------- | -------------------------------------------------------------- | --------------------- |
+| **PostgreSQL**            | Source of truth for users, memories, conversations, audit logs | Critical path         |
+| **Redis**                 | BullMQ queue backend, rate limiting, session/cache             | Critical path         |
+| **Qdrant**                | Vector store for semantic search                               | Critical path (async) |
+| **Ollama**                | Local embedding + optional LLM in dev/CI                       | Dev/CI default        |
+| **OpenAI**                | Production embeddings + chat completion                        | Prod default          |
+| **S3-compatible storage** | Conversation exports, eval artifacts                           | Non-critical path     |
 
 ### 1.4 Deployment Topology
 
@@ -93,12 +93,12 @@ Smriti is a production-grade agentic memory assistant. v1 delivers a REST API an
 
 ### 2.4 Consistency Window
 
-| Operation | Postgres | Qdrant | User-visible behavior |
-| --------- | -------- | ------ | --------------------- |
-| Create | Immediate | Async (~seconds) | Memory in list/GET immediately; search after indexing |
-| Update (content) | Immediate | Async re-index | Old vector may serve until new index completes |
-| Delete | Immediate | Async purge | Memory gone from API; stale vector possible briefly |
-| Reconciliation | — | Repair | Cron job every 15 min fixes drift |
+| Operation        | Postgres  | Qdrant           | User-visible behavior                                 |
+| ---------------- | --------- | ---------------- | ----------------------------------------------------- |
+| Create           | Immediate | Async (~seconds) | Memory in list/GET immediately; search after indexing |
+| Update (content) | Immediate | Async re-index   | Old vector may serve until new index completes        |
+| Delete           | Immediate | Async purge      | Memory gone from API; stale vector possible briefly   |
+| Reconciliation   | —         | Repair           | Cron job every 15 min fixes drift                     |
 
 API responses include `indexingStatus` (`pending` | `indexed` | `failed`) derived from `memory_embeddings` rows.
 
@@ -297,25 +297,25 @@ All endpoints are prefixed with `/v1`. Mutating endpoints require `Idempotency-K
 
 ### 5.1 Auth
 
-| Method | Path | Description |
-| ------ | ---- | ----------- |
-| POST | `/v1/auth/register` | Create user account |
-| POST | `/v1/auth/login` | Returns access + refresh tokens |
-| POST | `/v1/auth/refresh` | Rotate refresh token |
-| POST | `/v1/auth/logout` | Revoke refresh token |
-| POST | `/v1/api-keys` | Issue API key (plaintext shown once) |
-| DELETE | `/v1/api-keys/:id` | Revoke API key |
+| Method | Path                | Description                          |
+| ------ | ------------------- | ------------------------------------ |
+| POST   | `/v1/auth/register` | Create user account                  |
+| POST   | `/v1/auth/login`    | Returns access + refresh tokens      |
+| POST   | `/v1/auth/refresh`  | Rotate refresh token                 |
+| POST   | `/v1/auth/logout`   | Revoke refresh token                 |
+| POST   | `/v1/api-keys`      | Issue API key (plaintext shown once) |
+| DELETE | `/v1/api-keys/:id`  | Revoke API key                       |
 
 ### 5.2 Memories
 
-| Method | Path | Description |
-| ------ | ---- | ----------- |
-| POST | `/v1/memories` | Create memory |
-| GET | `/v1/memories` | List with cursor pagination |
-| GET | `/v1/memories/:id` | Get by ID |
-| PATCH | `/v1/memories/:id` | Partial update |
-| DELETE | `/v1/memories/:id` | Hard delete |
-| POST | `/v1/memories/search` | Semantic search |
+| Method | Path                  | Description                 |
+| ------ | --------------------- | --------------------------- |
+| POST   | `/v1/memories`        | Create memory               |
+| GET    | `/v1/memories`        | List with cursor pagination |
+| GET    | `/v1/memories/:id`    | Get by ID                   |
+| PATCH  | `/v1/memories/:id`    | Partial update              |
+| DELETE | `/v1/memories/:id`    | Hard delete                 |
+| POST   | `/v1/memories/search` | Semantic search             |
 
 #### Create Memory Request
 
@@ -392,11 +392,11 @@ All endpoints are prefixed with `/v1`. Mutating endpoints require `Idempotency-K
 
 ### 5.3 Chat
 
-| Method | Path | Description |
-| ------ | ---- | ----------- |
-| POST | `/v1/chat` | Synchronous chat turn |
-| POST | `/v1/conversations` | Create conversation |
-| GET | `/v1/conversations/:id/messages` | List messages |
+| Method | Path                             | Description           |
+| ------ | -------------------------------- | --------------------- |
+| POST   | `/v1/chat`                       | Synchronous chat turn |
+| POST   | `/v1/conversations`              | Create conversation   |
+| GET    | `/v1/conversations/:id/messages` | List messages         |
 
 #### Chat Request
 
@@ -420,19 +420,19 @@ All endpoints are prefixed with `/v1`. Mutating endpoints require `Idempotency-K
 
 ### 5.4 Admin
 
-| Method | Path | Role |
-| ------ | ---- | ---- |
-| GET | `/v1/admin/users` | admin |
-| GET | `/v1/admin/audit-logs` | admin |
+| Method | Path                   | Role  |
+| ------ | ---------------------- | ----- |
+| GET    | `/v1/admin/users`      | admin |
+| GET    | `/v1/admin/audit-logs` | admin |
 
 ### 5.5 Ops
 
-| Method | Path | Description |
-| ------ | ---- | ----------- |
-| GET | `/health` | Basic health |
-| GET | `/ready` | Readiness (Postgres, Redis, Qdrant) |
-| GET | `/live` | Liveness |
-| GET | `/metrics` | Prometheus format (Slice 7) |
+| Method | Path       | Description                         |
+| ------ | ---------- | ----------------------------------- |
+| GET    | `/health`  | Basic health                        |
+| GET    | `/ready`   | Readiness (Postgres, Redis, Qdrant) |
+| GET    | `/live`    | Liveness                            |
+| GET    | `/metrics` | Prometheus format (Slice 7)         |
 
 ### 5.6 Error Shape
 
@@ -456,8 +456,8 @@ All endpoints are prefixed with `/v1`. Mutating endpoints require `Idempotency-K
 interface ChatGraphState {
   userId: string;
   conversationId: string;
-  messages: Array<{ role: "user" | "assistant" | "system"; content: string }>;
-  intent: "remember_intent" | "recall_intent" | "general_chat" | null;
+  messages: Array<{ role: 'user' | 'assistant' | 'system'; content: string }>;
+  intent: 'remember_intent' | 'recall_intent' | 'general_chat' | null;
   extractedMemories: Array<{ content: string; type: string; confidence: number }>;
   retrievedMemories: Memory[];
   duplicateWarnings: Array<{ existingMemoryId: string; similarity: number }>;
@@ -468,16 +468,16 @@ interface ChatGraphState {
 
 ### 6.2 Nodes
 
-| Node | Responsibility |
-| ---- | -------------- |
-| `intentDetection` | Classify user message intent |
-| `memoryExtraction` | Extract storable facts from message |
-| `memoryValidation` | Validate extracted content (length, PII policy) |
-| `duplicateDetection` | Vector similarity check; detect-only in v1 |
-| `persistMemory` | Delegate to `CreateMemoryCommand` |
-| `semanticRetrieval` | Run search query from user message |
-| `contextGeneration` | Build delimited context block for LLM |
-| `responseGeneration` | Produce assistant reply |
+| Node                 | Responsibility                                  |
+| -------------------- | ----------------------------------------------- |
+| `intentDetection`    | Classify user message intent                    |
+| `memoryExtraction`   | Extract storable facts from message             |
+| `memoryValidation`   | Validate extracted content (length, PII policy) |
+| `duplicateDetection` | Vector similarity check; detect-only in v1      |
+| `persistMemory`      | Delegate to `CreateMemoryCommand`               |
+| `semanticRetrieval`  | Run search query from user message              |
+| `contextGeneration`  | Build delimited context block for LLM           |
+| `responseGeneration` | Produce assistant reply                         |
 
 ### 6.3 Graph Flow
 
@@ -513,18 +513,18 @@ LangGraph nodes call **application services only** (commands/queries). They neve
 
 All ports live in `packages/domain/src/ports/`. Adapters in `infrastructure/`.
 
-| Port | Methods | Adapter(s) |
-| ---- | ------- | ---------- |
-| `MemoryRepository` | `save`, `findById`, `findByUser`, `update`, `delete` | Prisma |
-| `AuditLogRepository` | `append` | Prisma |
-| `UserRepository` | `save`, `findByEmail`, `findById` | Prisma |
-| `EmbeddingProvider` | `embed(texts[])`, `model`, `dimension` | Ollama, OpenAI |
-| `LLMProvider` | `complete(messages, options?)`, `model` | OpenAI (v1 prod) |
-| `VectorStore` | `upsert`, `deleteByMemoryId`, `search` | Qdrant |
-| `JobQueue` | `enqueue`, `registerHandler` | BullMQ |
-| `IdempotencyStore` | `get`, `set` | Prisma/Redis |
-| `ObjectStore` | `put`, `get` | S3/MinIO |
-| `CacheStore` | `get`, `set`, `del` | Redis |
+| Port                 | Methods                                              | Adapter(s)       |
+| -------------------- | ---------------------------------------------------- | ---------------- |
+| `MemoryRepository`   | `save`, `findById`, `findByUser`, `update`, `delete` | Prisma           |
+| `AuditLogRepository` | `append`                                             | Prisma           |
+| `UserRepository`     | `save`, `findByEmail`, `findById`                    | Prisma           |
+| `EmbeddingProvider`  | `embed(texts[])`, `model`, `dimension`               | Ollama, OpenAI   |
+| `LLMProvider`        | `complete(messages, options?)`, `model`              | OpenAI (v1 prod) |
+| `VectorStore`        | `upsert`, `deleteByMemoryId`, `search`               | Qdrant           |
+| `JobQueue`           | `enqueue`, `registerHandler`                         | BullMQ           |
+| `IdempotencyStore`   | `get`, `set`                                         | Prisma/Redis     |
+| `ObjectStore`        | `put`, `get`                                         | S3/MinIO         |
+| `CacheStore`         | `get`, `set`, `del`                                  | Redis            |
 
 ### Port Interfaces (canonical)
 
@@ -567,30 +567,30 @@ Every port has a corresponding in-memory/fake adapter for unit tests.
 
 Validated at boot via Zod (`packages/shared/src/config.ts`). Application **fails fast** on missing required values.
 
-| Variable | Required | Default | Dev | Prod | Description |
-| -------- | -------- | ------- | --- | ---- | ----------- |
-| `NODE_ENV` | yes | — | `development` | `production` | Runtime mode |
-| `PORT` | no | `3000` | `3000` | `3000` | API listen port |
-| `DATABASE_URL` | yes | — | compose | managed | Postgres connection |
-| `REDIS_URL` | yes | — | compose | managed | Redis connection |
-| `QDRANT_URL` | yes | — | compose | managed | Qdrant HTTP endpoint |
-| `QDRANT_COLLECTION` | yes | — | `smriti_dev` | `smriti_prod` | Per-env collection |
-| `EMBEDDING_PROVIDER` | yes | `ollama` | `ollama` | `openai` | Provider selection |
-| `OLLAMA_BASE_URL` | if ollama | `http://ollama:11434` | ✓ | — | Ollama API |
-| `OLLAMA_EMBED_MODEL` | if ollama | `nomic-embed-text` | ✓ | — | Embed model |
-| `OPENAI_API_KEY` | if openai | — | optional | ✓ | OpenAI auth |
-| `OPENAI_EMBED_MODEL` | if openai | `text-embedding-3-small` | — | ✓ | Embed model |
-| `LLM_PROVIDER` | yes | `openai` | `ollama` | `openai` | Chat provider |
-| `OPENAI_CHAT_MODEL` | if openai | `gpt-4o-mini` | — | ✓ | Chat model |
-| `JWT_SECRET` | yes | — | dev secret | strong secret | Access token signing |
-| `JWT_EXPIRES_IN` | no | `15m` | ✓ | ✓ | Access token TTL |
-| `REFRESH_TOKEN_EXPIRES_IN` | no | `7d` | ✓ | ✓ | Refresh token TTL |
-| `S3_ENDPOINT` | no | — | MinIO | R2/S3 | Object storage |
-| `S3_BUCKET` | no | `smriti` | ✓ | ✓ | Bucket name |
-| `S3_ACCESS_KEY` | if S3 | — | minioadmin | IAM | Credentials |
-| `S3_SECRET_KEY` | if S3 | — | minioadmin | IAM | Credentials |
-| `LOG_LEVEL` | no | `info` | `debug` | `info` | Pino level |
-| `CORRELATION_ID_HEADER` | no | `x-correlation-id` | ✓ | ✓ | Request tracing |
+| Variable                   | Required  | Default                  | Dev           | Prod          | Description          |
+| -------------------------- | --------- | ------------------------ | ------------- | ------------- | -------------------- |
+| `NODE_ENV`                 | yes       | —                        | `development` | `production`  | Runtime mode         |
+| `PORT`                     | no        | `3000`                   | `3000`        | `3000`        | API listen port      |
+| `DATABASE_URL`             | yes       | —                        | compose       | managed       | Postgres connection  |
+| `REDIS_URL`                | yes       | —                        | compose       | managed       | Redis connection     |
+| `QDRANT_URL`               | yes       | —                        | compose       | managed       | Qdrant HTTP endpoint |
+| `QDRANT_COLLECTION`        | yes       | —                        | `smriti_dev`  | `smriti_prod` | Per-env collection   |
+| `EMBEDDING_PROVIDER`       | yes       | `ollama`                 | `ollama`      | `openai`      | Provider selection   |
+| `OLLAMA_BASE_URL`          | if ollama | `http://ollama:11434`    | ✓             | —             | Ollama API           |
+| `OLLAMA_EMBED_MODEL`       | if ollama | `nomic-embed-text`       | ✓             | —             | Embed model          |
+| `OPENAI_API_KEY`           | if openai | —                        | optional      | ✓             | OpenAI auth          |
+| `OPENAI_EMBED_MODEL`       | if openai | `text-embedding-3-small` | —             | ✓             | Embed model          |
+| `LLM_PROVIDER`             | yes       | `openai`                 | `ollama`      | `openai`      | Chat provider        |
+| `OPENAI_CHAT_MODEL`        | if openai | `gpt-4o-mini`            | —             | ✓             | Chat model           |
+| `JWT_SECRET`               | yes       | —                        | dev secret    | strong secret | Access token signing |
+| `JWT_EXPIRES_IN`           | no        | `15m`                    | ✓             | ✓             | Access token TTL     |
+| `REFRESH_TOKEN_EXPIRES_IN` | no        | `7d`                     | ✓             | ✓             | Refresh token TTL    |
+| `S3_ENDPOINT`              | no        | —                        | MinIO         | R2/S3         | Object storage       |
+| `S3_BUCKET`                | no        | `smriti`                 | ✓             | ✓             | Bucket name          |
+| `S3_ACCESS_KEY`            | if S3     | —                        | minioadmin    | IAM           | Credentials          |
+| `S3_SECRET_KEY`            | if S3     | —                        | minioadmin    | IAM           | Credentials          |
+| `LOG_LEVEL`                | no        | `info`                   | `debug`       | `info`        | Pino level           |
+| `CORRELATION_ID_HEADER`    | no        | `x-correlation-id`       | ✓             | ✓             | Request tracing      |
 
 ---
 
@@ -613,17 +613,17 @@ Validated at boot via Zod (`packages/shared/src/config.ts`). Application **fails
 
 ### 9.3 Threats and Mitigations
 
-| Threat | Impact | Mitigation |
-| ------ | ------ | ---------- |
+| Threat                                   | Impact                             | Mitigation                                                                                                   |
+| ---------------------------------------- | ---------------------------------- | ------------------------------------------------------------------------------------------------------------ |
 | **Prompt injection** via stored memories | LLM executes attacker instructions | Delimited context blocks; system prompt treats retrieved data as untrusted; eval suite tests injection cases |
-| **Cross-tenant data access** | User A reads User B's memories | All queries scoped by `user_id` from JWT/API key; repository enforces ownership |
-| **API key leakage** | Full account access | Keys stored hashed; shown once at creation; rotation via delete + reissue |
-| **Rate abuse / DoS** | Service degradation | Redis-backed rate limiting per user/IP |
-| **SQL injection** | Data breach | Prisma parameterized queries; no raw SQL without review |
-| **Idempotency replay** | Duplicate writes | Idempotency key + request hash with TTL |
-| **Stale vector leakage after delete** | Deleted memory still searchable | Delete job + reconciliation; document brief consistency window |
-| **Secrets in repo** | Credential exposure | `.env` gitignored; platform secret store in prod |
-| **Insufficient audit trail** | Compliance failure | All mutations logged with correlation ID, action, entity, content hash |
+| **Cross-tenant data access**             | User A reads User B's memories     | All queries scoped by `user_id` from JWT/API key; repository enforces ownership                              |
+| **API key leakage**                      | Full account access                | Keys stored hashed; shown once at creation; rotation via delete + reissue                                    |
+| **Rate abuse / DoS**                     | Service degradation                | Redis-backed rate limiting per user/IP                                                                       |
+| **SQL injection**                        | Data breach                        | Prisma parameterized queries; no raw SQL without review                                                      |
+| **Idempotency replay**                   | Duplicate writes                   | Idempotency key + request hash with TTL                                                                      |
+| **Stale vector leakage after delete**    | Deleted memory still searchable    | Delete job + reconciliation; document brief consistency window                                               |
+| **Secrets in repo**                      | Credential exposure                | `.env` gitignored; platform secret store in prod                                                             |
+| **Insufficient audit trail**             | Compliance failure                 | All mutations logged with correlation ID, action, entity, content hash                                       |
 
 ### 9.4 Auth Boundaries
 
@@ -658,11 +658,11 @@ smriti-2.0/
 
 ## 11. Background Jobs
 
-| Job | Trigger | Idempotency key | Retries |
-| --- | ------- | --------------- | ------- |
-| `embed-and-index` | memory create/update | `memoryId + contentHash` | 3 with exponential backoff |
-| `delete-vectors` | memory delete | `memoryId` | 3 |
-| `reconcile-vectors` | cron (15 min) | `runId + batchOffset` | 1 |
+| Job                 | Trigger              | Idempotency key          | Retries                    |
+| ------------------- | -------------------- | ------------------------ | -------------------------- |
+| `embed-and-index`   | memory create/update | `memoryId + contentHash` | 3 with exponential backoff |
+| `delete-vectors`    | memory delete        | `memoryId`               | 3                          |
+| `reconcile-vectors` | cron (15 min)        | `runId + batchOffset`    | 1                          |
 
 Failed jobs after max retries → DLQ → structured alert log (webhook in v1.1).
 
@@ -670,14 +670,14 @@ Failed jobs after max retries → DLQ → structured alert log (webhook in v1.1)
 
 ## 12. Testing Strategy
 
-| Layer | Tool | Scope |
-| ----- | ---- | ----- |
-| Domain | Vitest + in-memory fakes | Aggregate invariants, chunking |
-| Application | Vitest | Use cases with mocked ports |
-| Repositories | Vitest + Testcontainers/compose | Prisma CRUD |
-| API | Supertest | Auth, CRUD, search, idempotency |
-| Worker | Vitest + compose | Embed job end-to-end |
-| LangGraph | Vitest + `eval/` golden set | Node behavior + regression |
+| Layer        | Tool                            | Scope                           |
+| ------------ | ------------------------------- | ------------------------------- |
+| Domain       | Vitest + in-memory fakes        | Aggregate invariants, chunking  |
+| Application  | Vitest                          | Use cases with mocked ports     |
+| Repositories | Vitest + Testcontainers/compose | Prisma CRUD                     |
+| API          | Supertest                       | Auth, CRUD, search, idempotency |
+| Worker       | Vitest + compose                | Embed job end-to-end            |
+| LangGraph    | Vitest + `eval/` golden set     | Node behavior + regression      |
 
 CI runs lint, typecheck, unit tests, and docker-compose integration profile.
 

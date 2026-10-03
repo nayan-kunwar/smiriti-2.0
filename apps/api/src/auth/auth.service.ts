@@ -98,10 +98,7 @@ export class AuthService {
   }
 
   async logout(input: LogoutInput): Promise<void> {
-    await logoutUser(
-      { refreshTokenRepository: this.refreshTokenRepository },
-      input.refreshToken,
-    );
+    await logoutUser({ refreshTokenRepository: this.refreshTokenRepository }, input.refreshToken);
   }
 
   async createApiKey(userId: string, input: CreateApiKeyInput) {

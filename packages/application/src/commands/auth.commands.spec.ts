@@ -160,17 +160,12 @@ describe('Auth use cases', () => {
     });
     await authDeps.userRepository.save(user);
 
-    const created = await createApiKey(
-      { apiKeyRepository: authDeps.apiKeyRepository },
-      user.id,
-      { name: 'ci-key', scopes: ['memories:read'] },
-    );
+    const created = await createApiKey({ apiKeyRepository: authDeps.apiKeyRepository }, user.id, {
+      name: 'ci-key',
+      scopes: ['memories:read'],
+    });
     expect(created.key).toMatch(/^smriti_/);
 
-    await revokeApiKey(
-      { apiKeyRepository: authDeps.apiKeyRepository },
-      user.id,
-      created.id,
-    );
+    await revokeApiKey({ apiKeyRepository: authDeps.apiKeyRepository }, user.id, created.id);
   });
 });

@@ -1,5 +1,12 @@
 import { randomBytes, randomUUID } from 'node:crypto';
-import { User, hashToken, type ApiKeyRepository, type PasswordHasher, type RefreshTokenRepository, type UserRepository } from '@smriti/domain';
+import {
+  User,
+  hashToken,
+  type ApiKeyRepository,
+  type PasswordHasher,
+  type RefreshTokenRepository,
+  type UserRepository,
+} from '@smriti/domain';
 import { NotFoundError, ConflictError, UnauthorizedError } from '@smriti/shared';
 import type { CreateApiKeyInput, LoginInput, RegisterInput } from '@smriti/shared';
 import { toUserDto, type UserDto } from '../mappers/user.mapper.js';
@@ -59,10 +66,7 @@ function createRefreshTokenRecord(userId: string, refreshTokenExpiresIn: string)
   };
 }
 
-export async function registerUser(
-  deps: RegisterDeps,
-  input: RegisterInput,
-): Promise<AuthSession> {
+export async function registerUser(deps: RegisterDeps, input: RegisterInput): Promise<AuthSession> {
   const existing = await deps.userRepository.findByEmail(input.email);
   if (existing) {
     throw new ConflictError('Email already registered');
@@ -72,10 +76,7 @@ export async function registerUser(
   const user = User.create({ email: input.email, passwordHash });
   await deps.userRepository.save(user);
 
-  const { refreshToken, record } = createRefreshTokenRecord(
-    user.id,
-    deps.refreshTokenExpiresIn,
-  );
+  const { refreshToken, record } = createRefreshTokenRecord(user.id, deps.refreshTokenExpiresIn);
   await deps.refreshTokenRepository.save(record);
 
   return { user: toUserDto(user), refreshToken };
@@ -92,10 +93,7 @@ export async function loginUser(deps: LoginDeps, input: LoginInput): Promise<Aut
     throw new UnauthorizedError('Invalid email or password');
   }
 
-  const { refreshToken, record } = createRefreshTokenRecord(
-    user.id,
-    deps.refreshTokenExpiresIn,
-  );
+  const { refreshToken, record } = createRefreshTokenRecord(user.id, deps.refreshTokenExpiresIn);
   await deps.refreshTokenRepository.save(record);
 
   return { user: toUserDto(user), refreshToken };
@@ -178,16 +176,14 @@ export async function revokeApiKey(
   }
 }
 
-export function toApiKeyDto(
-  record: {
-    id: string;
-    name: string;
-    scopes: string[];
-    lastUsedAt: Date | null;
-    expiresAt: Date | null;
-    createdAt: Date;
-  },
-): ApiKeyDto {
+export function toApiKeyDto(record: {
+  id: string;
+  name: string;
+  scopes: string[];
+  lastUsedAt: Date | null;
+  expiresAt: Date | null;
+  createdAt: Date;
+}): ApiKeyDto {
   return {
     id: record.id,
     name: record.name,

@@ -10,7 +10,10 @@ import { JwtService } from '@nestjs/jwt';
 import { UnauthorizedError } from '@smriti/shared';
 import type { Request } from 'express';
 import { IS_PUBLIC_KEY } from '../decorators/public.decorator.js';
-import type { AuthenticatedUser, RequestWithUser } from '../../common/decorators/request-context.decorator.js';
+import type {
+  AuthenticatedUser,
+  RequestWithUser,
+} from '../../common/decorators/request-context.decorator.js';
 import { AuthService } from '../auth.service.js';
 
 @Injectable()

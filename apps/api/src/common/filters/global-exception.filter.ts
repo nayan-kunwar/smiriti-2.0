@@ -8,7 +8,13 @@ import {
   Logger,
 } from '@nestjs/common';
 import type { Request, Response } from 'express';
-import { DomainError, NotFoundError, ValidationError, ConflictError, UnauthorizedError } from '@smriti/shared';
+import {
+  DomainError,
+  NotFoundError,
+  ValidationError,
+  ConflictError,
+  UnauthorizedError,
+} from '@smriti/shared';
 
 @Catch()
 @Injectable()
@@ -78,17 +84,19 @@ export class GlobalExceptionFilter implements ExceptionFilter {
     if (exception instanceof HttpException) {
       const status = exception.getStatus();
       const body = exception.getResponse();
-      response.status(status).json(
-        typeof body === 'string'
-          ? { statusCode: status, error: exception.name, message: body, correlationId }
-          : { ...(body as object), correlationId },
-      );
+      response
+        .status(status)
+        .json(
+          typeof body === 'string'
+            ? { statusCode: status, error: exception.name, message: body, correlationId }
+            : { ...(body as object), correlationId },
+        );
       return;
     }
 
     this.logger.error(
       `Unhandled error on ${request.method} ${request.url} (correlationId=${correlationId}): ${
-        exception instanceof Error ? exception.stack ?? exception.message : String(exception)
+        exception instanceof Error ? (exception.stack ?? exception.message) : String(exception)
       }`,
     );
     response.status(HttpStatus.INTERNAL_SERVER_ERROR).json({

@@ -47,9 +47,7 @@ export async function searchMemories(
     const prev = bestByMemory.get(h.memoryId);
     if (prev === undefined || h.score > prev) bestByMemory.set(h.memoryId, h.score);
   }
-  const ranked = [...bestByMemory.entries()]
-    .sort((a, b) => b[1] - a[1])
-    .slice(0, input.limit);
+  const ranked = [...bestByMemory.entries()].sort((a, b) => b[1] - a[1]).slice(0, input.limit);
 
   const items: ScoredMemoryDto[] = [];
   for (const [memoryId, score] of ranked) {

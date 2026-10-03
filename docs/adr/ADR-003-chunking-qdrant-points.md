@@ -2,7 +2,7 @@
 
 **Status**: Accepted  
 **Date**: 2026-08-01  
-**Deciders**: Engineering  
+**Deciders**: Engineering
 
 ## Context
 
@@ -19,9 +19,9 @@ Alternatives considered:
 
 Apply **token-count-based chunking at embedding time** (not at memory creation):
 
-| Condition | Behavior |
-| --------- | -------- |
-| Content ≤ ~500 tokens | Single vector, one Qdrant point, point ID = `memoryId` |
+| Condition             | Behavior                                                |
+| --------------------- | ------------------------------------------------------- |
+| Content ≤ ~500 tokens | Single vector, one Qdrant point, point ID = `memoryId`  |
 | Content > ~500 tokens | Split into 800–1000 token chunks with 100 token overlap |
 
 **Qdrant point IDs**:

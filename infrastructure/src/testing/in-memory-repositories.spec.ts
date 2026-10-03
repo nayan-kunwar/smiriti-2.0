@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { InMemoryAuditLogRepository, InMemoryMemoryRepository } from '../testing/in-memory-repositories.js';
+import {
+  InMemoryAuditLogRepository,
+  InMemoryMemoryRepository,
+} from '../testing/in-memory-repositories.js';
 import { Memory } from '@smriti/domain';
 
 describe('InMemoryMemoryRepository', () => {

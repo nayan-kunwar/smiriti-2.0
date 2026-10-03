@@ -10,11 +10,7 @@ import {
   type MemoryDto,
   type ScoredMemoryDto,
 } from '@smriti/application';
-import type {
-  EmbeddingProvider,
-  JobQueue,
-  VectorStore,
-} from '@smriti/domain';
+import type { EmbeddingProvider, JobQueue, VectorStore } from '@smriti/domain';
 import { PrismaAuditLogRepository, PrismaMemoryRepository } from '@smriti/infrastructure';
 import type {
   CreateMemoryInput,
@@ -66,7 +62,10 @@ export class MemoryService implements OnModuleInit {
     return getMemory({ memoryRepository: this.memoryRepository }, userId, id);
   }
 
-  list(userId: string, query: ListMemoriesQueryInput): Promise<{ items: MemoryDto[]; cursor: string | null }> {
+  list(
+    userId: string,
+    query: ListMemoriesQueryInput,
+  ): Promise<{ items: MemoryDto[]; cursor: string | null }> {
     return listMemories({ memoryRepository: this.memoryRepository }, userId, query);
   }
 

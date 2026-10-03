@@ -47,7 +47,8 @@ class FakeAudit implements AuditLogRepository {
 class FakeQueue implements JobQueue {
   readonly jobs: Array<{ name: string; data: unknown; opts?: { jobId?: string } }> = [];
   async enqueue(name: string, data: unknown, opts?: { jobId?: string }): Promise<void> {
-    if (opts?.jobId && this.jobs.some((j) => j.name === name && j.opts?.jobId === opts.jobId)) return;
+    if (opts?.jobId && this.jobs.some((j) => j.name === name && j.opts?.jobId === opts.jobId))
+      return;
     this.jobs.push({ name, data, opts });
   }
 }
@@ -66,14 +67,24 @@ class FakeEmbed implements EmbeddingProvider {
 }
 
 class FakeVectors implements VectorStore {
-  private readonly pts = new Map<string, { vector: number[]; userId: string; memoryId: string; chunkIndex: number }>();
+  private readonly pts = new Map<
+    string,
+    { vector: number[]; userId: string; memoryId: string; chunkIndex: number }
+  >();
   async ensureCollection(): Promise<void> {}
-  async upsert(points: Array<{ id: string; vector: number[]; payload: { userId: string; memoryId: string; chunkIndex: number } }>): Promise<void> {
+  async upsert(
+    points: Array<{
+      id: string;
+      vector: number[];
+      payload: { userId: string; memoryId: string; chunkIndex: number };
+    }>,
+  ): Promise<void> {
     for (const p of points) this.pts.set(p.id, { vector: p.vector, ...p.payload });
   }
   async deleteByMemoryId(memoryId: string): Promise<void> {
     for (const [id, p] of this.pts) {
-      if (p.memoryId === memoryId || id === memoryId || id.startsWith(`${memoryId}_`)) this.pts.delete(id);
+      if (p.memoryId === memoryId || id === memoryId || id.startsWith(`${memoryId}_`))
+        this.pts.delete(id);
     }
   }
   async search(params: VectorSearchParams): Promise<VectorSearchResult[]> {
@@ -159,7 +170,11 @@ describe('vector pipeline', () => {
     const vectors = new FakeVectors();
     const embeddingStore = new FakeEmbeddingStore();
 
-    const memory = Memory.create({ userId: 'u', type: 'semantic', content: 'original content here' });
+    const memory = Memory.create({
+      userId: 'u',
+      type: 'semantic',
+      content: 'original content here',
+    });
     await memoryRepo.save(memory);
     memory.update({ content: 'updated content here' });
     await memoryRepo.update(memory);

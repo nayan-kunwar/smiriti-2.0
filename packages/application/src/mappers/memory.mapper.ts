@@ -17,7 +17,10 @@ export interface MemoryDto {
   updatedAt: string;
 }
 
-export function toMemoryDto(memory: Memory, indexingStatus: IndexingStatus = 'not_applicable'): MemoryDto {
+export function toMemoryDto(
+  memory: Memory,
+  indexingStatus: IndexingStatus = 'not_applicable',
+): MemoryDto {
   return {
     id: memory.id,
     userId: memory.userId,

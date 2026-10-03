@@ -43,7 +43,7 @@ class InMemoryMemoryRepository implements MemoryRepository {
 
     const page = items.slice(startIndex, startIndex + query.limit);
     const nextCursor =
-      startIndex + query.limit < items.length ? page[page.length - 1]?.id ?? null : null;
+      startIndex + query.limit < items.length ? (page[page.length - 1]?.id ?? null) : null;
 
     return {
       items: page.map((m) => Memory.reconstitute(m.toProps())),

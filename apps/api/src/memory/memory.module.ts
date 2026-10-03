@@ -3,11 +3,7 @@ import { MemoryController } from './memory.controller.js';
 import { MemoryService } from './memory.service.js';
 import { APP_CONFIG } from '../config/config.module.js';
 import { EMBEDDING_PROVIDER, JOB_QUEUE, VECTOR_STORE } from './memory.tokens.js';
-import {
-  BullMqJobQueue,
-  QdrantVectorStore,
-  createEmbeddingProvider,
-} from '@smriti/infrastructure';
+import { BullMqJobQueue, QdrantVectorStore, createEmbeddingProvider } from '@smriti/infrastructure';
 import type { AppConfig } from '@smriti/shared';
 import type { EmbeddingProvider } from '@smriti/domain';
 
