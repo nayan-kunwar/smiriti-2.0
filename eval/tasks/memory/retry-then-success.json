@@ -1,0 +1,22 @@
+{
+  "id": "retry-then-success",
+  "suite": "memory",
+  "seed": 1,
+  "input": {
+    "messages": [{ "role": "user", "content": "I live in Pune." }]
+  },
+  "fixtures": { "memories": [] },
+  "injectFailures": [{ "tool": "memory.create", "times": 1 }],
+  "scriptedModel": [
+    {
+      "tool": "memory.create",
+      "args": { "content": "User lives in Pune.", "type": "semantic" }
+    },
+    { "stop": true }
+  ],
+  "expect": {
+    "status": "completed",
+    "toolCalls": [{ "name": "memory.create", "argsIncludes": { "content": "Pune" } }],
+    "memoryCount": 1
+  }
+}

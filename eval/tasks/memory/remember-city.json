@@ -1,0 +1,23 @@
+{
+  "id": "remember-city",
+  "suite": "memory",
+  "seed": 1,
+  "input": {
+    "messages": [{ "role": "user", "content": "I live in Pune." }]
+  },
+  "fixtures": { "memories": [] },
+  "scriptedModel": [
+    {
+      "tool": "memory.create",
+      "args": { "content": "User lives in Pune.", "type": "semantic" }
+    },
+    { "stop": true }
+  ],
+  "expect": {
+    "status": "completed",
+    "toolCalls": [{ "name": "memory.create", "argsIncludes": { "content": "Pune" } }],
+    "forbiddenTools": ["memory.delete"],
+    "memoryCount": 1,
+    "memories": [{ "contentIncludes": "Pune", "type": "semantic" }]
+  }
+}

@@ -1,0 +1,21 @@
+{
+  "id": "timeout",
+  "suite": "memory",
+  "seed": 1,
+  "input": {
+    "messages": [{ "role": "user", "content": "I live in Pune." }]
+  },
+  "fixtures": { "memories": [] },
+  "policy": { "timeoutMs": 40, "maxSteps": 4 },
+  "hangTool": "memory.create",
+  "scriptedModel": [
+    {
+      "tool": "memory.create",
+      "args": { "content": "User lives in Pune.", "type": "semantic" }
+    }
+  ],
+  "expect": {
+    "status": "cancelled",
+    "memoryCount": 0
+  }
+}

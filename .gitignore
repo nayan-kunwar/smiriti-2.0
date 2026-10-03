@@ -11,4 +11,6 @@ Thumbs.db
 .idea/
 .turbo/
 .cursor/
+eval/reports/
+*.tsbuildinfo
 prisma/migrations/**/migration_lock.toml

@@ -1,0 +1,14 @@
+{
+  "id": "invalid-tool-args",
+  "suite": "memory",
+  "seed": 1,
+  "input": {
+    "messages": [{ "role": "user", "content": "Remember this." }]
+  },
+  "fixtures": { "memories": [] },
+  "scriptedModel": [{ "tool": "memory.create", "args": { "content": "", "type": "semantic" } }],
+  "expect": {
+    "status": "failed",
+    "memoryCount": 0
+  }
+}

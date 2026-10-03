@@ -1,0 +1,28 @@
+{
+  "id": "remember-multi",
+  "suite": "memory",
+  "seed": 1,
+  "input": {
+    "messages": [{ "role": "user", "content": "I live in Pune and I like chai." }]
+  },
+  "fixtures": { "memories": [] },
+  "scriptedModel": [
+    {
+      "tool": "memory.create",
+      "args": { "content": "User lives in Pune.", "type": "semantic" }
+    },
+    {
+      "tool": "memory.create",
+      "args": { "content": "User likes chai.", "type": "semantic" }
+    },
+    { "stop": true }
+  ],
+  "expect": {
+    "status": "completed",
+    "toolCalls": [
+      { "name": "memory.create", "argsIncludes": { "content": "Pune" } },
+      { "name": "memory.create", "argsIncludes": { "content": "chai" } }
+    ],
+    "memoryCount": 2
+  }
+}

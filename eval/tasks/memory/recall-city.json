@@ -1,0 +1,21 @@
+{
+  "id": "recall-city",
+  "suite": "memory",
+  "seed": 1,
+  "input": {
+    "messages": [{ "role": "user", "content": "Where do I live?" }]
+  },
+  "fixtures": {
+    "memories": [{ "content": "User lives in Pune.", "type": "semantic" }]
+  },
+  "scriptedModel": [
+    { "tool": "memory.search", "args": { "query": "Pune" } },
+    { "stop": true, "text": "You live in Pune." }
+  ],
+  "expect": {
+    "status": "completed",
+    "toolCalls": [{ "name": "memory.search", "argsIncludes": { "query": "Pune" } }],
+    "forbiddenTools": ["memory.create"],
+    "memoryCount": 1
+  }
+}

@@ -68,6 +68,9 @@ jobs:
           EMBEDDING_PROVIDER: ollama
           LLM_PROVIDER: ollama
 
+      - name: Eval harness
+        run: pnpm eval
+
   docker-build:
     runs-on: ubuntu-latest
     needs: lint-typecheck-test

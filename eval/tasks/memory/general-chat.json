@@ -1,0 +1,15 @@
+{
+  "id": "general-chat",
+  "suite": "memory",
+  "seed": 1,
+  "input": {
+    "messages": [{ "role": "user", "content": "Hello." }]
+  },
+  "fixtures": { "memories": [] },
+  "scriptedModel": [{ "stop": true, "text": "Hello." }],
+  "expect": {
+    "status": "completed",
+    "toolCalls": [],
+    "memoryCount": 0
+  }
+}
