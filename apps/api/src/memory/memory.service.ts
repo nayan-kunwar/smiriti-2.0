@@ -1,4 +1,4 @@
-import { Inject, Injectable, OnModuleInit } from '@nestjs/common';
+import { Inject, Injectable, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
 import type { PrismaClient } from '@prisma/client';
 import {
   createMemory,
@@ -22,7 +22,7 @@ import { PRISMA_CLIENT } from '../prisma/prisma.module.js';
 import { EMBEDDING_PROVIDER, JOB_QUEUE, VECTOR_STORE } from './memory.tokens.js';
 
 @Injectable()
-export class MemoryService implements OnModuleInit {
+export class MemoryService implements OnModuleInit, OnModuleDestroy {
   private readonly memoryRepository: PrismaMemoryRepository;
   private readonly auditLogRepository: PrismaAuditLogRepository;
 
@@ -43,6 +43,12 @@ export class MemoryService implements OnModuleInit {
       // Don't crash API if Qdrant is briefly unavailable; search/indexing will retry.
       // eslint-disable-next-line no-console
       console.warn('Qdrant ensureCollection failed on boot:', err);
+    }
+  }
+
+  async onModuleDestroy(): Promise<void> {
+    if (isClosable(this.jobQueue)) {
+      await this.jobQueue.close();
     }
   }
 
@@ -121,4 +127,8 @@ export class MemoryService implements OnModuleInit {
       id,
     );
   }
+}
+
+function isClosable(queue: JobQueue): queue is JobQueue & { close: () => Promise<void> } {
+  return 'close' in queue && typeof queue.close === 'function';
 }
