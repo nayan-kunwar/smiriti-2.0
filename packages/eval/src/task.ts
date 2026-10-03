@@ -53,7 +53,7 @@ export const TaskSchema = z.object({
         .optional(),
     })
     .optional(),
-  scriptedModel: z.array(ScriptStepSchema).min(1),
+  scriptedModel: z.array(ScriptStepSchema).min(1).optional(),
   policy: z
     .object({
       maxSteps: z.number().int().positive().optional(),

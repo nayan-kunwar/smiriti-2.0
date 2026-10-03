@@ -1,7 +1,7 @@
 {
   "id": "invalid-tool-args",
   "suite": "memory",
-  "seed": 1,
+  "seed": 4,
   "input": {
     "messages": [{ "role": "user", "content": "Remember this." }]
   },

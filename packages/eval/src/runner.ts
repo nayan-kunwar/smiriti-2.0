@@ -8,7 +8,7 @@ import {
   runAgent,
   traceToJsonl,
 } from '@smriti/harness';
-import type { RunResult, Tool } from '@smriti/harness';
+import type { Message, Model, RunResult, Tool, TraceEvent } from '@smriti/harness';
 import { checkGate } from './gate.js';
 import type { Baseline, EvalReport, SuiteScore, TaskReport } from './gate.js';
 import { MemoryStore } from './memory-store.js';
@@ -23,21 +23,35 @@ const CONCURRENCY = 4;
 export interface RunEvalOptions {
   tasksDir: string;
   reportsDir: string;
-  baselinePath: string;
+  baselinePath?: string;
+  modelFactory?: (task: EvalTask) => Model;
+  taskFilter?: string;
 }
 
 export async function runEval(
   options: RunEvalOptions,
 ): Promise<{ report: EvalReport; gate: { ok: boolean; failures: string[] } }> {
-  const tasks = await loadTasks(options.tasksDir);
+  const allTasks = await loadTasks(options.tasksDir);
+  const tasks = options.taskFilter
+    ? allTasks.filter((task) => task.id === options.taskFilter)
+    : allTasks;
+  if (tasks.length === 0) {
+    throw new Error(`no tasks match filter "${options.taskFilter ?? ''}"`);
+  }
   const runId = randomUUID();
   const traceDir = path.join(options.reportsDir, runId);
   await mkdir(traceDir, { recursive: true });
 
-  const taskReports = await mapPool(tasks, CONCURRENCY, (task) => runTask(task, runId, traceDir));
+  const modelFactory = options.modelFactory ?? ((task) => scriptedModel(task.scriptedModel ?? []));
+  const taskReports = await mapPool(tasks, CONCURRENCY, (task) =>
+    runTask(task, runId, traceDir, modelFactory),
+  );
   const report = buildReport(runId, taskReports);
   await writeFile(path.join(options.reportsDir, `${runId}.json`), JSON.stringify(report, null, 2));
 
+  if (!options.baselinePath) {
+    return { report, gate: { ok: true, failures: [] } };
+  }
   const baseline = JSON.parse(await readFile(options.baselinePath, 'utf8')) as Baseline;
   const gate = checkGate(report, baseline);
   return { report, gate };
@@ -58,7 +72,12 @@ export async function loadTasks(tasksDir: string): Promise<EvalTask[]> {
   return tasks;
 }
 
-async function runTask(task: EvalTask, reportId: string, traceDir: string): Promise<TaskReport> {
+async function runTask(
+  task: EvalTask,
+  reportId: string,
+  traceDir: string,
+  modelFactory: (task: EvalTask) => Model,
+): Promise<TaskReport> {
   const startedAt = Date.now();
   const store = new MemoryStore(task.fixtures?.memories ?? []);
   let tools = memoryTools(store);
@@ -72,7 +91,7 @@ async function runTask(task: EvalTask, reportId: string, traceDir: string): Prom
   }
 
   const registry = createRegistry(tools);
-  const model = scriptedModel(task.scriptedModel);
+  const model = modelFactory(task);
   const checkpoint = memoryCheckpointStore();
   const runId = `${reportId}_${task.id}`;
   const agentTask = { runId, messages: task.input.messages };
@@ -121,6 +140,8 @@ async function runTask(task: EvalTask, reportId: string, traceDir: string): Prom
     latencyMs: Date.now() - startedAt,
     retryCount: result.trace.filter((event) => event.type === 'retry').length,
     failures: scored.failures,
+    promptChars: messageChars(result.messages),
+    completionChars: outputChars(result.trace),
   };
 }
 
@@ -145,6 +166,10 @@ function buildReport(runId: string, tasks: TaskReport[]): EvalReport {
     latencyMs: { p50: percentile(latencies, 0.5), p95: percentile(latencies, 0.95) },
     retryCount,
     tasks,
+    usage: {
+      promptChars: tasks.reduce((sum, task) => sum + (task.promptChars ?? 0), 0),
+      completionChars: tasks.reduce((sum, task) => sum + (task.completionChars ?? 0), 0),
+    },
   };
 }
 
@@ -153,6 +178,19 @@ export function percentile(values: number[], p: number): number {
   const sorted = [...values].sort((left, right) => left - right);
   const index = Math.min(sorted.length - 1, Math.max(0, Math.ceil(p * sorted.length) - 1));
   return sorted[index] ?? 0;
+}
+
+export function messageChars(messages: Message[]): number {
+  return messages.reduce((sum, message) => sum + message.content.length, 0);
+}
+
+export function outputChars(trace: TraceEvent[]): number {
+  return trace
+    .filter((event) => event.type === 'model.output')
+    .reduce((sum, event) => {
+      if (event.type !== 'model.output') return sum;
+      return sum + JSON.stringify(event.output).length;
+    }, 0);
 }
 
 function hangTool(tool: Tool): Tool {

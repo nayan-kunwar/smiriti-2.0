@@ -3,6 +3,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseJsonl } from '@smriti/harness';
 import { diffTraces } from './diff.js';
+import { DEFAULT_DMR_BASE_URL, DEFAULT_DMR_CHAT_MODEL, dmrModel } from './dmr-model.js';
 import { runEval } from './runner.js';
 import { replayTrace } from './replay.js';
 
@@ -35,6 +36,29 @@ async function main(): Promise<void> {
     return;
   }
 
+  if (command === 'live') {
+    // Local-only: same tasks and scorer, real DMR model instead of the scripted
+    // model. Informational — never gates CI (see eval/README.md).
+    const [taskFilter] = args;
+    const baseUrl = process.env.DMR_BASE_URL ?? DEFAULT_DMR_BASE_URL;
+    const model = process.env.DMR_CHAT_MODEL ?? DEFAULT_DMR_CHAT_MODEL;
+    process.stdout.write(`live model ${model} at ${baseUrl}\n`);
+    const { report } = await runEval({
+      tasksDir: path.join(repoRoot, 'eval', 'tasks'),
+      reportsDir: path.join(repoRoot, 'eval', 'reports'),
+      modelFactory: () => dmrModel({ baseUrl, model }),
+      ...(taskFilter ? { taskFilter } : {}),
+    });
+    printReport(report, path.join(repoRoot, 'eval', 'reports'));
+    for (const task of report.tasks) {
+      const status = task.passed ? 'pass' : 'FAIL';
+      process.stdout.write(
+        `  ${status} ${task.id} status=${task.status} retries=${task.retryCount} failures=${task.failures.join('; ')}\n`,
+      );
+    }
+    return;
+  }
+
   if (command) {
     throw new Error(`unknown command ${command}`);
   }
@@ -45,6 +69,17 @@ async function main(): Promise<void> {
     baselinePath: path.join(repoRoot, 'eval', 'baseline.json'),
   });
 
+  printReport(report, path.join(repoRoot, 'eval', 'reports'));
+
+  if (!gate.ok) {
+    for (const failure of gate.failures) process.stderr.write(`${failure}\n`);
+    process.exitCode = 1;
+    return;
+  }
+  process.stdout.write('gate ok\n');
+}
+
+function printReport(report: import('./gate.js').EvalReport, reportsDir: string): void {
   for (const [name, suite] of Object.entries(report.suites)) {
     process.stdout.write(
       `${name} pass rate ${suite.passRate} (${suite.passed}/${suite.total}) n=${report.n} seeds=${suite.seeds.join(',')}\n`,
@@ -53,17 +88,13 @@ async function main(): Promise<void> {
   process.stdout.write(
     `latency p50=${report.latencyMs.p50} p95=${report.latencyMs.p95} retries=${report.retryCount}\n`,
   );
-  process.stdout.write(`${report.note}\n`);
-  process.stdout.write(
-    `report ${path.join(repoRoot, 'eval', 'reports', `${report.runId}.json`)}\n`,
-  );
-
-  if (!gate.ok) {
-    for (const failure of gate.failures) process.stderr.write(`${failure}\n`);
-    process.exitCode = 1;
-    return;
+  if (report.usage) {
+    process.stdout.write(
+      `chars prompt=${report.usage.promptChars} completion=${report.usage.completionChars}\n`,
+    );
   }
-  process.stdout.write('gate ok\n');
+  process.stdout.write(`${report.note}\n`);
+  process.stdout.write(`report ${path.join(reportsDir, `${report.runId}.json`)}\n`);
 }
 
 main().catch((error: unknown) => {

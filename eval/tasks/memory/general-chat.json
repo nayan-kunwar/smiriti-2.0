@@ -1,7 +1,7 @@
 {
   "id": "general-chat",
   "suite": "memory",
-  "seed": 1,
+  "seed": 2,
   "input": {
     "messages": [{ "role": "user", "content": "Hello." }]
   },

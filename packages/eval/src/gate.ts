@@ -14,6 +14,8 @@ export interface TaskReport {
   latencyMs: number;
   retryCount: number;
   failures: string[];
+  promptChars?: number;
+  completionChars?: number;
 }
 
 export interface EvalReport {
@@ -24,10 +26,12 @@ export interface EvalReport {
   latencyMs: { p50: number; p95: number };
   retryCount: number;
   tasks: TaskReport[];
+  usage?: { promptChars: number; completionChars: number };
 }
 
 export interface Baseline {
   suites: Record<string, { passRate: number }>;
+  tasks?: Record<string, { passed: boolean }>;
 }
 
 export function checkGate(
@@ -45,6 +49,19 @@ export function checkGate(
     if (drop - 0.05 > 1e-9) {
       failures.push(
         `${name} pass rate ${actual.passRate} dropped more than 0.05 from ${expected.passRate}`,
+      );
+    }
+  }
+  const byId = new Map(report.tasks.map((task) => [task.id, task]));
+  for (const [id, expected] of Object.entries(baseline.tasks ?? {})) {
+    const actual = byId.get(id);
+    if (!actual) {
+      failures.push(`missing task ${id} (pinned in baseline)`);
+      continue;
+    }
+    if (expected.passed && !actual.passed) {
+      failures.push(
+        `task ${id} previously passed, now fails: ${actual.failures.join('; ') || actual.status}`,
       );
     }
   }

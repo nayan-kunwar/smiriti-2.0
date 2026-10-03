@@ -3,5 +3,17 @@
     "memory": {
       "passRate": 1
     }
+  },
+  "tasks": {
+    "dedup-city": { "passed": true },
+    "general-chat": { "passed": true },
+    "injection-stored": { "passed": true },
+    "invalid-tool-args": { "passed": true },
+    "recall-city": { "passed": true },
+    "remember-city": { "passed": true },
+    "remember-multi": { "passed": true },
+    "resume": { "passed": true },
+    "retry-then-success": { "passed": true },
+    "timeout": { "passed": true }
   }
 }

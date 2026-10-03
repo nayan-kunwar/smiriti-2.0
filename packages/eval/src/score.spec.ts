@@ -43,4 +43,29 @@ describe('scoreTask', () => {
     expect(result.passed).toBe(false);
     expect(result.failures[0]).toContain('forbidden tool');
   });
+
+  it('matches ordered repeats against absolute positions', () => {
+    const trace = [
+      call('memory.create', { content: 'first' }),
+      call('memory.search', { query: 'x' }),
+      call('memory.create', { content: 'second' }),
+      call('memory.create', { content: 'third' }),
+    ];
+    const result = scoreTask({
+      status: 'completed',
+      trace,
+      memories: [],
+      expect: {
+        status: 'completed',
+        toolCalls: [
+          { name: 'memory.create', argsIncludes: { content: 'first' } },
+          { name: 'memory.create', argsIncludes: { content: 'second' } },
+          { name: 'memory.create', argsIncludes: { content: 'third' } },
+        ],
+      },
+    });
+
+    expect(result.failures).toEqual([]);
+    expect(result.passed).toBe(true);
+  });
 });
