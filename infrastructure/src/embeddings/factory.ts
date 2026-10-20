@@ -9,12 +9,16 @@ export function createEmbeddingProvider(config: AppConfig): EmbeddingProvider {
         baseUrl: config.DMR_BASE_URL,
         model: config.DMR_EMBED_MODEL,
         dimension: 768,
+        // DMR runs nomic-embed-text with a 512-token physical batch; keep a
+        // safety margin because token counts are estimated from characters.
+        maxInputTokens: 400,
       });
     case 'openai':
       return new OpenAICompatibleEmbeddingProvider({
         baseUrl: 'https://api.openai.com/v1',
         model: config.OPENAI_EMBED_MODEL,
         dimension: 1536,
+        maxInputTokens: 8191,
         apiKey: config.OPENAI_API_KEY,
       });
     case 'ollama':
@@ -23,6 +27,7 @@ export function createEmbeddingProvider(config: AppConfig): EmbeddingProvider {
         baseUrl: `${config.OLLAMA_BASE_URL.replace(/\/$/, '')}/v1`,
         model: config.OLLAMA_EMBED_MODEL,
         dimension: 768,
+        maxInputTokens: 8192,
       });
   }
 }

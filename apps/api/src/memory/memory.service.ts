@@ -1,4 +1,4 @@
-import { Inject, Injectable, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
+import { Inject, Injectable, Logger, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
 import type { PrismaClient } from '@prisma/client';
 import {
   createMemory,
@@ -7,33 +7,44 @@ import {
   listMemories,
   searchMemories,
   updateMemory,
+  type DuplicateMemoryMatch,
   type MemoryDto,
   type ScoredMemoryDto,
 } from '@smriti/application';
 import type { EmbeddingProvider, JobQueue, VectorStore } from '@smriti/domain';
-import { PrismaAuditLogRepository, PrismaMemoryRepository } from '@smriti/infrastructure';
+import {
+  PrismaAuditLogRepository,
+  PrismaMemoryIndexStateStore,
+  PrismaMemoryRepository,
+} from '@smriti/infrastructure';
 import type {
+  AppConfig,
   CreateMemoryInput,
   ListMemoriesQueryInput,
   SearchMemoriesInput,
   UpdateMemoryInput,
 } from '@smriti/shared';
+import { APP_CONFIG } from '../config/config.module.js';
 import { PRISMA_CLIENT } from '../prisma/prisma.module.js';
 import { EMBEDDING_PROVIDER, JOB_QUEUE, VECTOR_STORE } from './memory.tokens.js';
 
 @Injectable()
 export class MemoryService implements OnModuleInit, OnModuleDestroy {
+  private readonly logger = new Logger(MemoryService.name);
   private readonly memoryRepository: PrismaMemoryRepository;
   private readonly auditLogRepository: PrismaAuditLogRepository;
+  private readonly indexStateStore: PrismaMemoryIndexStateStore;
 
   constructor(
     @Inject(PRISMA_CLIENT) prisma: PrismaClient,
     @Inject(EMBEDDING_PROVIDER) private readonly embeddingProvider: EmbeddingProvider,
     @Inject(VECTOR_STORE) private readonly vectorStore: VectorStore,
     @Inject(JOB_QUEUE) private readonly jobQueue: JobQueue,
+    @Inject(APP_CONFIG) private readonly config: AppConfig,
   ) {
     this.memoryRepository = new PrismaMemoryRepository(prisma);
     this.auditLogRepository = new PrismaAuditLogRepository(prisma);
+    this.indexStateStore = new PrismaMemoryIndexStateStore(prisma);
   }
 
   async onModuleInit(): Promise<void> {
@@ -52,27 +63,82 @@ export class MemoryService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
-  create(userId: string, correlationId: string, input: CreateMemoryInput): Promise<MemoryDto> {
+  create(
+    userId: string,
+    correlationId: string,
+    input: CreateMemoryInput,
+    force = false,
+  ): Promise<MemoryDto> {
     return createMemory(
       {
         memoryRepository: this.memoryRepository,
         auditLogRepository: this.auditLogRepository,
         jobQueue: this.jobQueue,
+        indexStateStore: this.indexStateStore,
+        duplicateDetector: (ownerId, content) => this.findDuplicate(ownerId, content),
       },
-      { userId, correlationId },
+      { userId, correlationId, force },
       input,
     );
   }
 
+  /**
+   * Dedup must never block a durable Postgres write. If embedding or Qdrant is
+   * unavailable, fall through and let the normal indexing path retry.
+   */
+  private async findDuplicate(
+    userId: string,
+    content: string,
+  ): Promise<DuplicateMemoryMatch | null> {
+    let timer: NodeJS.Timeout | undefined;
+    try {
+      const timeout = new Promise<null>((resolve) => {
+        timer = setTimeout(() => resolve(null), this.config.DEDUP_TIMEOUT_MS);
+      });
+      const result = await Promise.race([
+        this.search(userId, {
+          query: content,
+          limit: 1,
+          includeArchived: false,
+        }),
+        timeout,
+      ]);
+      if (!result) {
+        this.logger.warn(`Duplicate check timed out for user ${userId}`);
+        return null;
+      }
+      const top = result.items[0];
+      if (top && top.score >= this.config.DEDUP_SIMILARITY_THRESHOLD) {
+        return { memoryId: top.id, similarity: Math.min(1, top.score) };
+      }
+      return null;
+    } catch (err) {
+      this.logger.warn(
+        `Duplicate check skipped for user ${userId}: ${err instanceof Error ? err.message : String(err)}`,
+      );
+      return null;
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+  }
+
   get(userId: string, id: string): Promise<MemoryDto> {
-    return getMemory({ memoryRepository: this.memoryRepository }, userId, id);
+    return getMemory(
+      { memoryRepository: this.memoryRepository, indexStateStore: this.indexStateStore },
+      userId,
+      id,
+    );
   }
 
   list(
     userId: string,
     query: ListMemoriesQueryInput,
   ): Promise<{ items: MemoryDto[]; cursor: string | null }> {
-    return listMemories({ memoryRepository: this.memoryRepository }, userId, query);
+    return listMemories(
+      { memoryRepository: this.memoryRepository, indexStateStore: this.indexStateStore },
+      userId,
+      query,
+    );
   }
 
   search(
@@ -109,6 +175,7 @@ export class MemoryService implements OnModuleInit, OnModuleDestroy {
         memoryRepository: this.memoryRepository,
         auditLogRepository: this.auditLogRepository,
         jobQueue: this.jobQueue,
+        indexStateStore: this.indexStateStore,
       },
       { userId, correlationId },
       id,

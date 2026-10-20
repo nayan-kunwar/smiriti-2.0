@@ -1,0 +1,18 @@
+{
+  "id": "chat-general-hello",
+  "suite": "chat",
+  "kind": "chat",
+  "seed": 14,
+  "input": {
+    "messages": [{ "role": "user", "content": "Hello there" }]
+  },
+  "chatScript": ["{\"intent\":\"general\",\"memories\":[]}", "Hello! How can I help?"],
+  "expect": {
+    "status": "completed",
+    "memoryCount": 0,
+    "memoriesCreated": 0,
+    "responseIncludes": ["Hello"],
+    "conversationMessages": 2,
+    "duplicateCount": 0
+  }
+}

@@ -1,5 +1,6 @@
 export const EMBED_AND_INDEX_JOB = 'embed-and-index';
 export const DELETE_VECTORS_JOB = 'delete-vectors';
+export const RECONCILE_VECTORS_JOB = 'reconcile-vectors';
 
 export interface EmbedAndIndexPayload {
   memoryId: string;
@@ -16,6 +17,11 @@ export interface DeleteVectorsPayload {
 
 export interface EnqueueOptions {
   jobId?: string;
+  /**
+   * Replace a terminal job with the same ID. Requeuing a failed job with a
+   * duplicate ID is otherwise a no-op in BullMQ.
+   */
+  force?: boolean;
 }
 
 export interface JobQueue {

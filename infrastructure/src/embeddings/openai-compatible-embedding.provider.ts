@@ -4,6 +4,7 @@ export interface OpenAICompatibleEmbeddingOptions {
   baseUrl: string;
   model: string;
   dimension: number;
+  maxInputTokens?: number;
   apiKey?: string;
   batchSize?: number;
   timeoutMs?: number;
@@ -26,6 +27,7 @@ async function fetchWithTimeout(
 export class OpenAICompatibleEmbeddingProvider implements EmbeddingProvider {
   readonly model: string;
   readonly dimension: number;
+  readonly maxInputTokens: number;
   private readonly baseUrl: string;
   private readonly apiKey?: string;
   private readonly batchSize: number;
@@ -35,6 +37,7 @@ export class OpenAICompatibleEmbeddingProvider implements EmbeddingProvider {
     this.baseUrl = opts.baseUrl.replace(/\/$/, '');
     this.model = opts.model;
     this.dimension = opts.dimension;
+    this.maxInputTokens = opts.maxInputTokens ?? 900;
     this.apiKey = opts.apiKey;
     this.batchSize = opts.batchSize ?? 32;
     this.timeoutMs = opts.timeoutMs ?? 60_000;

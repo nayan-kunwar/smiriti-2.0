@@ -2,9 +2,16 @@
   "suites": {
     "memory": {
       "passRate": 1
+    },
+    "chat": {
+      "passRate": 1
     }
   },
   "tasks": {
+    "chat-dedup-nyc": { "passed": true },
+    "chat-general-hello": { "passed": true },
+    "chat-recall-paris": { "passed": true },
+    "chat-remember-lisbon": { "passed": true },
     "dedup-city": { "passed": true },
     "general-chat": { "passed": true },
     "injection-stored": { "passed": true },

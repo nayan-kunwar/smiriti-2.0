@@ -4,6 +4,12 @@ import { Test } from '@nestjs/testing';
 import { INestApplication } from '@nestjs/common';
 import request from 'supertest';
 import { PrismaClient } from '@prisma/client';
+import {
+  FakeEmbeddingProvider,
+  InMemoryJobQueue,
+  InMemoryVectorStore,
+} from '@smriti/infrastructure';
+import { EMBEDDING_PROVIDER, JOB_QUEUE, VECTOR_STORE } from './memory.tokens.js';
 
 let databaseAvailable = false;
 
@@ -32,9 +38,14 @@ describe.skipIf(!dbAvailable)('Memory API (e2e)', () => {
     const { AppModule } = await import('../app.module.js');
     const { PRISMA_CLIENT } = await import('../prisma/prisma.module.js');
 
-    const moduleRef = await Test.createTestingModule({
-      imports: [AppModule],
-    }).compile();
+    const moduleRef = await Test.createTestingModule({ imports: [AppModule] })
+      .overrideProvider(EMBEDDING_PROVIDER)
+      .useValue(new FakeEmbeddingProvider())
+      .overrideProvider(VECTOR_STORE)
+      .useValue(new InMemoryVectorStore())
+      .overrideProvider(JOB_QUEUE)
+      .useValue(new InMemoryJobQueue())
+      .compile();
 
     app = moduleRef.createNestApplication();
     await app.init();
@@ -56,7 +67,7 @@ describe.skipIf(!dbAvailable)('Memory API (e2e)', () => {
       .expect(201);
 
     apiKey = apiKeyRes.body.key;
-  });
+  }, 30_000);
 
   afterAll(async () => {
     if (!app) return;
@@ -83,6 +94,7 @@ describe.skipIf(!dbAvailable)('Memory API (e2e)', () => {
     expect(response.body.content).toBe('Favorite color is blue');
     expect(response.body.userId).toBe(userId);
     expect(response.body.tags).toEqual(['preferences']);
+    expect(response.body.indexingStatus).toBe('pending');
 
     const auditLogs = await prisma.auditLog.findMany({
       where: { userId, action: 'memory.create' },

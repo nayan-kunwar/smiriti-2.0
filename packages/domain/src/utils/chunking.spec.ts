@@ -18,8 +18,19 @@ describe('chunking', () => {
     expect(estimateTokens(chunks[0].text)).toBeLessThanOrEqual(1000);
   });
 
+  it('honors a provider input limit', () => {
+    const content = 'a'.repeat(5000);
+    const chunks = chunkMemoryContent(content, 400);
+    expect(chunks.length).toBeGreaterThan(1);
+    for (const chunk of chunks) {
+      expect(chunk.tokenCount).toBeLessThanOrEqual(400);
+    }
+  });
+
   it('builds qdrant point ids', () => {
     expect(qdrantPointId('mem-1', 0)).toBe('mem-1');
-    expect(qdrantPointId('mem-1', 2)).toBe('mem-1_2');
+    const id = qdrantPointId('00000000-0000-0000-0000-000000000000', 2);
+    expect(id).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-5[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
+    expect(qdrantPointId('00000000-0000-0000-0000-000000000000', 2)).toBe(id);
   });
 });

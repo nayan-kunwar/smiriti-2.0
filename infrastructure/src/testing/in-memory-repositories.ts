@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { Memory, User } from '@smriti/domain';
 import type {
   ApiKeyRecord,
@@ -5,6 +6,10 @@ import type {
   AuditLogEntry,
   AuditLogRecord,
   AuditLogRepository,
+  ConversationMessageRecord,
+  ConversationRecord,
+  ConversationRepository,
+  ConversationRole,
   ListAuditLogsQuery,
   ListMemoriesQuery,
   ListUsersQuery,
@@ -60,6 +65,29 @@ export class InMemoryMemoryRepository implements MemoryRepository {
       items: page.map((m) => Memory.reconstitute(m.toProps())),
       nextCursor,
     };
+  }
+
+  async findAll(cursor: string | undefined, limit: number): Promise<PaginatedResult<Memory>> {
+    const items = [...this.store.values()].sort((a, b) => a.id.localeCompare(b.id));
+
+    let startIndex = 0;
+    if (cursor) {
+      const cursorIndex = items.findIndex((m) => m.id === cursor);
+      startIndex = cursorIndex >= 0 ? cursorIndex + 1 : 0;
+    }
+
+    const page = items.slice(startIndex, startIndex + limit);
+    const nextCursor =
+      startIndex + limit < items.length ? (page[page.length - 1]?.id ?? null) : null;
+
+    return {
+      items: page.map((m) => Memory.reconstitute(m.toProps())),
+      nextCursor,
+    };
+  }
+
+  async existsByIds(ids: string[]): Promise<Set<string>> {
+    return new Set(ids.filter((id) => this.store.has(id)));
   }
 
   async update(memory: Memory): Promise<void> {
@@ -186,6 +214,64 @@ export class InMemoryRefreshTokenRepository implements RefreshTokenRepository {
 
   clear(): void {
     this.store.clear();
+  }
+}
+
+export class InMemoryConversationRepository implements ConversationRepository {
+  private readonly conversations = new Map<string, ConversationRecord>();
+  private readonly messages = new Map<string, ConversationMessageRecord[]>();
+
+  async createConversation(userId: string, title: string | null): Promise<ConversationRecord> {
+    const now = new Date();
+    const record: ConversationRecord = {
+      id: randomUUID(),
+      userId,
+      title,
+      metadata: {},
+      createdAt: now,
+      updatedAt: now,
+    };
+    this.conversations.set(record.id, record);
+    this.messages.set(record.id, []);
+    return { ...record, metadata: { ...record.metadata } };
+  }
+
+  async findConversation(userId: string, id: string): Promise<ConversationRecord | null> {
+    const record = this.conversations.get(id);
+    if (!record || record.userId !== userId) return null;
+    return { ...record, metadata: { ...record.metadata } };
+  }
+
+  async appendMessage(
+    conversationId: string,
+    role: ConversationRole,
+    content: string,
+  ): Promise<ConversationMessageRecord> {
+    if (!this.conversations.has(conversationId)) {
+      throw new Error(`Conversation not found: ${conversationId}`);
+    }
+    const record: ConversationMessageRecord = {
+      id: randomUUID(),
+      conversationId,
+      role,
+      content,
+      createdAt: new Date(),
+    };
+    this.messages.get(conversationId)!.push(record);
+    const conversation = this.conversations.get(conversationId)!;
+    conversation.updatedAt = new Date();
+    return { ...record };
+  }
+
+  async listMessages(conversationId: string, limit?: number): Promise<ConversationMessageRecord[]> {
+    const messages = [...(this.messages.get(conversationId) ?? [])];
+    const selected = limit ? messages.slice(-limit) : messages;
+    return selected.map((message) => ({ ...message }));
+  }
+
+  clear(): void {
+    this.conversations.clear();
+    this.messages.clear();
   }
 }
 

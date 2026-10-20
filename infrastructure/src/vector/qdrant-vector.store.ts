@@ -1,5 +1,7 @@
 import type {
   VectorPoint,
+  VectorPointRef,
+  VectorScanPage,
   VectorSearchParams,
   VectorSearchResult,
   VectorStore,
@@ -9,6 +11,10 @@ export interface QdrantVectorStoreOptions {
   baseUrl: string;
   collection: string;
   dimension: number;
+}
+
+function toQdrantOffset(cursor: string): string | number {
+  return /^\d+$/.test(cursor) ? Number(cursor) : cursor;
 }
 
 export class QdrantVectorStore implements VectorStore {
@@ -70,9 +76,26 @@ export class QdrantVectorStore implements VectorStore {
   }
 
   async deleteByMemoryId(memoryId: string): Promise<void> {
-    // Scroll all points matching memoryId (handles chunked {memoryId}_{i}), then delete.
-    const matched: string[] = [];
-    let offset: unknown = undefined;
+    const points = await this.listPointsByMemoryId(memoryId);
+    await this.deletePoints(points.map((p) => p.id));
+  }
+
+  async deletePoints(ids: string[]): Promise<void> {
+    if (ids.length === 0) return;
+    const res = await fetch(
+      `${this.baseUrl}/collections/${this.collection}/points/delete?wait=true`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ points: ids }),
+      },
+    );
+    if (!res.ok) throw new Error(`Qdrant delete failed: ${res.status}`);
+  }
+
+  async listPointsByMemoryId(memoryId: string): Promise<VectorPointRef[]> {
+    const points: VectorPointRef[] = [];
+    let offset: string | number | undefined;
     for (;;) {
       const res = await fetch(`${this.baseUrl}/collections/${this.collection}/points/scroll`, {
         method: 'POST',
@@ -81,29 +104,65 @@ export class QdrantVectorStore implements VectorStore {
           filter: { must: [{ key: 'memoryId', match: { value: memoryId } }] },
           limit: 100,
           ...(offset !== undefined ? { offset } : {}),
-          with_payload: false,
+          with_payload: true,
           with_vector: false,
         }),
       });
       if (!res.ok) throw new Error(`Qdrant scroll failed: ${res.status}`);
       const json = (await res.json()) as {
-        result: { points: Array<{ id: string }>; next_page_offset?: unknown };
+        result: {
+          points: Array<{
+            id: string | number;
+            payload?: { memoryId?: string; chunkIndex?: number };
+          }>;
+          next_page_offset?: string | number | null;
+        };
       };
-      for (const p of json.result.points) matched.push(p.id);
+      for (const p of json.result.points) {
+        points.push({
+          id: String(p.id),
+          memoryId: p.payload?.memoryId ?? memoryId,
+          chunkIndex: p.payload?.chunkIndex ?? 0,
+        });
+      }
       if (json.result.next_page_offset == null) break;
-      offset = json.result.next_page_offset;
+      offset = toQdrantOffset(String(json.result.next_page_offset));
     }
-    // Also cover chunked ids stored as point id prefix but payload missed (defensive).
-    if (matched.length === 0) return;
-    const del = await fetch(
-      `${this.baseUrl}/collections/${this.collection}/points/delete?wait=true`,
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ points: matched }),
-      },
-    );
-    if (!del.ok) throw new Error(`Qdrant delete failed: ${del.status}`);
+    return points;
+  }
+
+  async scanPoints(cursor?: string | null, limit = 256): Promise<VectorScanPage> {
+    const res = await fetch(`${this.baseUrl}/collections/${this.collection}/points/scroll`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        limit: Math.min(Math.max(limit, 1), 1000),
+        ...(cursor ? { offset: toQdrantOffset(cursor) } : {}),
+        with_payload: true,
+        with_vector: false,
+      }),
+    });
+    if (!res.ok) throw new Error(`Qdrant scroll failed: ${res.status}`);
+    const json = (await res.json()) as {
+      result: {
+        points: Array<{
+          id: string | number;
+          payload?: { memoryId?: string; chunkIndex?: number };
+        }>;
+        next_page_offset?: string | number | null;
+      };
+    };
+    return {
+      points: json.result.points
+        .filter((p) => typeof p.payload?.memoryId === 'string')
+        .map((p) => ({
+          id: String(p.id),
+          memoryId: p.payload!.memoryId!,
+          chunkIndex: p.payload?.chunkIndex ?? 0,
+        })),
+      nextCursor:
+        json.result.next_page_offset == null ? null : String(json.result.next_page_offset),
+    };
   }
 
   async search(params: VectorSearchParams): Promise<VectorSearchResult[]> {

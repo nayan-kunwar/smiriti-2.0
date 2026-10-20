@@ -32,5 +32,6 @@ import type { EmbeddingProvider } from '@smriti/domain';
       inject: [APP_CONFIG],
     },
   ],
+  exports: [EMBEDDING_PROVIDER, VECTOR_STORE, JOB_QUEUE],
 })
 export class MemoryModule {}

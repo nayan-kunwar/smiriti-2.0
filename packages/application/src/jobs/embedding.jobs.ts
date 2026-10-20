@@ -3,6 +3,7 @@ import {
   qdrantPointId,
   type EmbeddingProvider,
   type MemoryEmbeddingStore,
+  type MemoryIndexStateStore,
   type MemoryRepository,
   type VectorStore,
 } from '@smriti/domain';
@@ -12,6 +13,7 @@ export interface EmbedAndIndexDeps {
   embeddingProvider: EmbeddingProvider;
   vectorStore: VectorStore;
   embeddingStore: MemoryEmbeddingStore;
+  indexStateStore?: MemoryIndexStateStore;
   embeddingProviderName: string;
 }
 
@@ -31,7 +33,9 @@ export async function handleEmbedAndIndex(
   // Idempotency: skip if content changed since enqueue.
   if (memory.contentHash !== payload.contentHash) return;
 
-  const chunks = chunkMemoryContent(memory.content);
+  await deps.indexStateStore?.markPending(memory.id, memory.contentHash);
+
+  const chunks = chunkMemoryContent(memory.content, deps.embeddingProvider.maxInputTokens);
   const vectors = await deps.embeddingProvider.embed(chunks.map((c) => c.text));
 
   await deps.vectorStore.upsert(
@@ -49,6 +53,14 @@ export async function handleEmbedAndIndex(
     })),
   );
 
+  // Content can shrink (or chunk boundaries move); drop points left over
+  // from the previous version so search cannot return stale chunks.
+  const expectedPointIds = new Set(chunks.map((c) => qdrantPointId(memory.id, c.index)));
+  const existingPoints = await deps.vectorStore.listPointsByMemoryId(memory.id);
+  await deps.vectorStore.deletePoints(
+    existingPoints.filter((p) => !expectedPointIds.has(p.id)).map((p) => p.id),
+  );
+
   await deps.embeddingStore.replaceForMemory(
     chunks.map((c, i) => ({
       memoryId: memory.id,
@@ -61,6 +73,8 @@ export async function handleEmbedAndIndex(
       status: 'indexed' as const,
     })),
   );
+
+  await deps.indexStateStore?.markIndexed(memory.id, memory.contentHash);
 }
 
 export interface DeleteVectorsDeps {

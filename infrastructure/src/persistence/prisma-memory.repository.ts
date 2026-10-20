@@ -91,6 +91,37 @@ export class PrismaMemoryRepository implements MemoryRepository {
     };
   }
 
+  async findAll(cursor: string | undefined, limit: number): Promise<PaginatedResult<Memory>> {
+    const take = Math.max(1, limit) + 1;
+    const records = await this.prisma.memory.findMany({
+      orderBy: { id: 'asc' },
+      take,
+      ...(cursor
+        ? {
+            cursor: { id: cursor },
+            skip: 1,
+          }
+        : {}),
+    });
+
+    const hasMore = records.length > limit;
+    const page = hasMore ? records.slice(0, limit) : records;
+
+    return {
+      items: page.map(toDomain),
+      nextCursor: hasMore ? page[page.length - 1].id : null,
+    };
+  }
+
+  async existsByIds(ids: string[]): Promise<Set<string>> {
+    if (ids.length === 0) return new Set();
+    const records = await this.prisma.memory.findMany({
+      where: { id: { in: ids } },
+      select: { id: true },
+    });
+    return new Set(records.map((r) => r.id));
+  }
+
   async update(memory: Memory): Promise<void> {
     const props = memory.toProps();
     await this.prisma.memory.update({

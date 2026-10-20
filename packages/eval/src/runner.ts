@@ -9,8 +9,21 @@ import {
   traceToJsonl,
 } from '@smriti/harness';
 import type { Message, Model, RunResult, Tool, TraceEvent } from '@smriti/harness';
+import { chat } from '@smriti/application';
+import { Memory } from '@smriti/domain';
+import type { ChatModel } from '@smriti/domain';
+import {
+  FakeChatModel,
+  FakeEmbeddingProvider,
+  InMemoryAuditLogRepository,
+  InMemoryConversationRepository,
+  InMemoryMemoryRepository,
+  InMemoryVectorStore,
+} from '@smriti/infrastructure';
 import { checkGate } from './gate.js';
 import type { Baseline, EvalReport, SuiteScore, TaskReport } from './gate.js';
+import { scoreChatTask } from './chat-score.js';
+import type { ChatMemoryView } from './chat-score.js';
 import { MemoryStore } from './memory-store.js';
 import { memoryTools } from './memory-tools.js';
 import { scoreTask } from './score.js';
@@ -25,6 +38,7 @@ export interface RunEvalOptions {
   reportsDir: string;
   baselinePath?: string;
   modelFactory?: (task: EvalTask) => Model;
+  chatModelFactory?: (task: EvalTask) => ChatModel;
   taskFilter?: string;
 }
 
@@ -43,8 +57,11 @@ export async function runEval(
   await mkdir(traceDir, { recursive: true });
 
   const modelFactory = options.modelFactory ?? ((task) => scriptedModel(task.scriptedModel ?? []));
+  const chatModelFactory =
+    options.chatModelFactory ??
+    ((task) => new FakeChatModel(task.chatScript ?? ['{"intent":"general","memories":[]}']));
   const taskReports = await mapPool(tasks, CONCURRENCY, (task) =>
-    runTask(task, runId, traceDir, modelFactory),
+    runTask(task, runId, traceDir, modelFactory, chatModelFactory),
   );
   const report = buildReport(runId, taskReports);
   await writeFile(path.join(options.reportsDir, `${runId}.json`), JSON.stringify(report, null, 2));
@@ -77,7 +94,12 @@ async function runTask(
   reportId: string,
   traceDir: string,
   modelFactory: (task: EvalTask) => Model,
+  chatModelFactory: (task: EvalTask) => ChatModel,
 ): Promise<TaskReport> {
+  if (task.kind === 'chat') {
+    return runChatTask(task, traceDir, chatModelFactory(task));
+  }
+
   const startedAt = Date.now();
   const store = new MemoryStore(task.fixtures?.memories ?? []);
   let tools = memoryTools(store);
@@ -142,6 +164,144 @@ async function runTask(
     failures: scored.failures,
     promptChars: messageChars(result.messages),
     completionChars: outputChars(result.trace),
+  };
+}
+
+const CHAT_EVAL_USER_ID = '00000000-0000-4000-8000-000000000001';
+
+async function runChatTask(
+  task: EvalTask,
+  traceDir: string,
+  chatModel: ChatModel,
+): Promise<TaskReport> {
+  const startedAt = Date.now();
+  const memoryRepository = new InMemoryMemoryRepository();
+  const conversationRepository = new InMemoryConversationRepository();
+  const auditLogRepository = new InMemoryAuditLogRepository();
+  const embeddingProvider = new FakeEmbeddingProvider();
+  const vectorStore = new InMemoryVectorStore();
+  let response = '';
+  let memoriesCreated = 0;
+  let retrieved: ChatMemoryView[] = [];
+  let duplicateCount = 0;
+  let conversationMessages = 0;
+  let error: string | undefined;
+
+  try {
+    for (const fixture of task.fixtures?.memories ?? []) {
+      const memory = Memory.create({
+        userId: CHAT_EVAL_USER_ID,
+        type: fixture.type,
+        content: fixture.content,
+        tags: fixture.tags,
+      });
+      await memoryRepository.save(memory);
+      const [vector] = await embeddingProvider.embed([memory.content]);
+      await vectorStore.upsert([
+        {
+          id: memory.id,
+          vector,
+          payload: {
+            userId: CHAT_EVAL_USER_ID,
+            memoryId: memory.id,
+            chunkIndex: 0,
+            tags: memory.tags,
+            createdAt: memory.createdAt.toISOString(),
+          },
+        },
+      ]);
+    }
+
+    const userMessage = [...task.input.messages]
+      .reverse()
+      .find((message) => message.role === 'user')?.content;
+    if (!userMessage) throw new Error('chat task has no user message');
+
+    const result = await chat(
+      {
+        conversationRepository,
+        chatModel,
+        memoryRepository,
+        auditLogRepository,
+        embeddingProvider,
+        vectorStore,
+        dedupThreshold: 0.92,
+        searchTimeoutMs: 1_000,
+      },
+      {
+        userId: CHAT_EVAL_USER_ID,
+        correlationId: `chat-eval-${task.id}`,
+        message: userMessage,
+      },
+    );
+
+    response = result.message;
+    memoriesCreated = result.memoriesCreated.length;
+    duplicateCount = result.duplicateWarnings.length;
+    const retrievedMemories = await Promise.all(
+      result.memoriesRetrieved.map((id) => memoryRepository.findById(CHAT_EVAL_USER_ID, id)),
+    );
+    retrieved = retrievedMemories
+      .filter((memory): memory is Memory => memory !== null)
+      .map((memory) => ({
+        id: memory.id,
+        content: memory.content,
+        type: memory.type,
+        tags: memory.tags,
+      }));
+    conversationMessages = (await conversationRepository.listMessages(result.conversationId))
+      .length;
+  } catch (err) {
+    error = err instanceof Error ? err.message : String(err);
+  }
+
+  const allMemories = await memoryRepository.findByUser(CHAT_EVAL_USER_ID, {
+    limit: 1_000,
+    includeArchived: true,
+  });
+  const memories: ChatMemoryView[] = allMemories.items.map((memory) => ({
+    id: memory.id,
+    content: memory.content,
+    type: memory.type,
+    tags: memory.tags,
+  }));
+  const scored = scoreChatTask({
+    status: error ? 'failed' : 'completed',
+    response,
+    memories,
+    memoriesCreated,
+    retrieved,
+    duplicateCount,
+    conversationMessages,
+    expect: task.expect,
+    error,
+  });
+
+  await writeFile(
+    path.join(traceDir, `${task.id}.jsonl`),
+    `${JSON.stringify({
+      type: 'chat.result',
+      taskId: task.id,
+      response,
+      memoriesCreated,
+      retrievedContents: retrieved.map((memory) => memory.content),
+      duplicateCount,
+      conversationMessages,
+      error,
+    })}\n`,
+  );
+
+  return {
+    id: task.id,
+    suite: task.suite,
+    seed: task.seed,
+    passed: scored.passed,
+    status: error ? 'failed' : 'completed',
+    latencyMs: Date.now() - startedAt,
+    retryCount: 0,
+    failures: scored.failures,
+    promptChars: task.input.messages.reduce((sum, message) => sum + message.content.length, 0),
+    completionChars: response.length,
   };
 }
 

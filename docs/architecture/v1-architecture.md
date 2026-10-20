@@ -1,8 +1,9 @@
 # Smriti v1 Architecture
 
-> **Status**: Approved for implementation  
-> **Scope**: Long-term + semantic memory, REST APIs, LangGraph `/chat`, embedding pipeline, auth, observability  
-> **Last updated**: 2026-08-01
+> **Status**: v1 implemented (memory CRUD, semantic search, async indexing, reconciliation, REST/chat dedup, and LangGraph `/v1/chat`).
+> **Scope**: Long-term + semantic memory, REST APIs, LangGraph `/chat`, embedding pipeline, auth, observability
+> **Not in v1**: `/metrics`, request-level idempotency, object storage, DLQ, auth/API-key audit events, per-user rate-limit tracking, streaming chat/checkpointing.
+> **Last updated**: 2026-10-20
 
 ---
 
@@ -14,24 +15,27 @@ Smriti is a production-grade agentic memory assistant. v1 delivers a REST API an
 
 ### 1.2 Actors
 
-| Actor              | Description                                                      |
-| ------------------ | ---------------------------------------------------------------- |
-| **End user**       | Registers, authenticates, manages memories via REST or chat      |
-| **API consumer**   | External service using JWT or API key to call memory APIs        |
-| **Admin**          | RBAC `admin` role; views users and audit logs                    |
-| **Worker process** | BullMQ consumer for embedding, vector indexing, reconciliation   |
-| **CI pipeline**    | Runs tests and golden-dataset evals against docker-compose stack |
+| Actor              | Description                                                            |
+| ------------------ | ---------------------------------------------------------------------- |
+| **End user**       | Registers, authenticates, manages memories via REST or chat            |
+| **API consumer**   | External service using JWT or API key to call memory APIs              |
+| **Admin**          | RBAC `admin` role; views users and audit logs                          |
+| **Worker process** | BullMQ consumer for embedding, vector indexing, reconciliation         |
+| **CI pipeline**    | GitHub Actions: format/lint/typecheck, tests, eval gate, Docker builds |
 
 ### 1.3 External Dependencies
 
-| Dependency                | Role                                                           | v1 usage              |
-| ------------------------- | -------------------------------------------------------------- | --------------------- |
-| **PostgreSQL**            | Source of truth for users, memories, conversations, audit logs | Critical path         |
-| **Redis**                 | BullMQ queue backend, rate limiting, session/cache             | Critical path         |
-| **Qdrant**                | Vector store for semantic search                               | Critical path (async) |
-| **Ollama**                | Local embedding + optional LLM in dev/CI                       | Dev/CI default        |
-| **OpenAI**                | Production embeddings + chat completion                        | Prod default          |
-| **S3-compatible storage** | Conversation exports, eval artifacts                           | Non-critical path     |
+| Dependency                | Role                                                                                | v1 usage              |
+| ------------------------- | ----------------------------------------------------------------------------------- | --------------------- |
+| **PostgreSQL**            | Source of truth for users, memories, conversations, audit logs, durable index state | Critical path         |
+| **Redis**                 | BullMQ queue/schedulers and rate-limit counters                                     | Critical path         |
+| **Qdrant**                | Vector store for semantic search                                                    | Critical path (async) |
+| **Docker Model Runner**   | Local embedding + chat through an OpenAI-compatible API                             | Local default         |
+| **Ollama**                | Optional local embedding + chat provider                                            | Supported             |
+| **OpenAI**                | Optional hosted embeddings + chat provider                                          | Supported             |
+| **S3-compatible storage** | Planned conversation exports and eval artifacts                                     | Not implemented v1    |
+
+Embedding vectors are **provider-scoped**. A collection is never shared across providers or dimensions; the local DMR collection is `smriti_dev_dmr_768` (768 dimensions). See [ADR-004](../adr/ADR-004-embedding-provider-split.md) and [ADR-007](../adr/ADR-007-docker-model-runner.md).
 
 ### 1.4 Deployment Topology
 
@@ -55,9 +59,9 @@ Smriti is a production-grade agentic memory assistant. v1 delivers a REST API an
               └─────────────────────────┘
 ```
 
-- **Local**: `docker compose up` runs all services including Ollama and MinIO.
-- **Production**: Two container types (API + worker) against managed Postgres, Redis, Qdrant, and S3. No Kubernetes coupling; env-driven config only.
-- **Consistency model**: Postgres is SoT; vectors are eventually consistent (target SLA < 30s under normal load).
+- **Local**: `pnpm docker:up` runs Postgres, Redis, Qdrant, Ollama, and MinIO. Docker Model Runner is host-native (Docker Desktop) at `http://localhost:12434/engines/v1`; containers reach it at `http://model-runner.docker.internal/engines/v1`.
+- **Production**: Two container types (API + worker) against managed Postgres, Redis, Qdrant, and a configured embedding/chat provider. No Kubernetes coupling; env-driven config only.
+- **Consistency model**: Postgres is SoT. A durable `memory_index_states` row is authoritative for `indexingStatus`; Qdrant is eventually consistent (target SLA < 30s under normal load) and is repaired by a scheduled reconciler.
 
 ---
 
@@ -65,31 +69,36 @@ Smriti is a production-grade agentic memory assistant. v1 delivers a REST API an
 
 ### 2.1 Create
 
-1. Client sends `POST /v1/memories` with `Idempotency-Key` header.
-2. API validates input (Zod), checks idempotency store.
-3. Application `CreateMemoryCommand` runs domain invariants.
-4. Memory persisted in Postgres inside a transaction.
-5. Audit log entry written (`memory.create`).
-6. `embed-and-index` job enqueued (idempotency key: `memoryId + contentHash`).
+1. Client sends `POST /v1/memories` with a bearer token or API key.
+2. API validates input (Zod).
+3. Unless `?force=true`, a best-effort semantic duplicate check runs first (`DEDUP_TIMEOUT_MS`). A match at or above `DEDUP_SIMILARITY_THRESHOLD` returns `409 Conflict` with `{ existingMemoryId, similarity }` and writes nothing.
+4. Application `createMemory` runs domain invariants.
+5. Memory persisted in Postgres; audit log entry written (`memory.create`).
+6. `memory_index_states` is marked `pending` with the current content hash, then `embed-and-index` is enqueued with `jobId = {memoryId}_{contentHash}`.
 7. Response returns memory with `indexingStatus: pending`.
-8. Worker: token-count → chunk or atomic → embed → upsert Qdrant → update `memory_embeddings` status to `indexed`.
+8. Worker re-reads the memory and skips if its content hash no longer matches the job.
+9. Worker chunks against the provider input limit, embeds, upserts Qdrant, prunes stale chunk points, replaces `memory_embeddings` rows, and marks `memory_index_states` `indexed`.
+
+The dedup check is intentionally not part of the durable write path: if embeddings or Qdrant are unavailable, creation proceeds and indexing retries normally.
+
+**Known limitation:** the memory, audit, and index-state writes are separate Prisma statements (no surrounding transaction). A crash after the memory insert can leave the memory without an audit entry; the reconciler repairs missing/stale index state. Request-level `Idempotency-Key` handling is deferred; job IDs provide indexing idempotency.
 
 ### 2.2 Update
 
 1. `PATCH /v1/memories/:id` with changed fields.
 2. Domain validates invariants (e.g. cannot be pinned and archived).
-3. Postgres update in transaction; `content_hash` recomputed if content changed.
+3. Postgres update; `content_hash` recomputed if content changed.
 4. Audit log (`memory.update`).
-5. If content changed: re-enqueue `embed-and-index` (old vectors replaced on success).
-6. Response reflects current Postgres state; `indexingStatus` may be `pending` briefly.
+5. If content changed: mark `pending` for the new hash and re-enqueue `embed-and-index`. The old Qdrant points remain searchable until the new index succeeds; the handler then upserts new chunks and deletes stale chunk points.
+6. Response reflects current Postgres state; `indexingStatus` is `pending` until the worker commits `indexed`.
 
 ### 2.3 Delete
 
 1. `DELETE /v1/memories/:id`.
-2. Postgres row hard-deleted in transaction.
+2. Postgres row hard-deleted.
 3. Audit log (`memory.delete`) with content hash snapshot (not full PII).
-4. `delete-vectors` job enqueued (idempotency key: `memoryId`).
-5. Worker deletes all Qdrant points matching `memoryId` prefix (handles chunked memories).
+4. `delete-vectors` job enqueued with `jobId = memoryId`.
+5. Worker scrolls Qdrant by the `memoryId` payload field and deletes every matching chunk point, then deletes the `memory_embeddings` rows. If the job is lost, the reconciler deletes points whose memory no longer exists.
 
 ### 2.4 Consistency Window
 
@@ -98,9 +107,24 @@ Smriti is a production-grade agentic memory assistant. v1 delivers a REST API an
 | Create           | Immediate | Async (~seconds) | Memory in list/GET immediately; search after indexing |
 | Update (content) | Immediate | Async re-index   | Old vector may serve until new index completes        |
 | Delete           | Immediate | Async purge      | Memory gone from API; stale vector possible briefly   |
-| Reconciliation   | —         | Repair           | Cron job every 15 min fixes drift                     |
+| Reconciliation   | —         | Repair           | Job scheduler every 15 min fixes drift                |
 
-API responses include `indexingStatus` (`pending` | `indexed` | `failed`) derived from `memory_embeddings` rows.
+API responses include `indexingStatus` (`pending` | `indexed` | `failed` | `not_applicable`) from the durable `memory_index_states` row. A stored hash that differs from the memory's current hash is treated as `pending`. `not_applicable` is returned when no durable index-state store is wired (for example, direct use-case tests). Search hits are the exception: they report `indexed` because they are served from Qdrant.
+
+The reconciler scans Postgres in pages, compares state/hash, verifies that each `indexed` memory has exactly its expected Qdrant chunk points, force-re-enqueues inconsistent memories up to a cap, and deletes Qdrant points whose memory no longer exists. Deletion candidates are re-checked against Postgres to avoid racing a concurrent create.
+
+### 2.5 Chat Turn
+
+1. Client sends `POST /v1/chat` with `{ message, conversationId? }`.
+2. The API finds or creates an owned conversation and loads the last 20 messages as history.
+3. The user message is appended to Postgres before the graph runs.
+4. `classify` asks the chat model for `remember`, `recall`, or `general` intent and extracts candidate memories for `remember`.
+5. `remember`: `validate` trims/deduplicates extracted content, then `persist` runs best-effort dedup per memory and calls the shared `createMemory` use case. Duplicates are skipped and reported as warnings.
+6. `recall`: `retrieve` embeds the user message, searches Qdrant, hydrates the matching Postgres rows, and `buildContext` wraps them in `<retrieved_memories>` delimiters.
+7. `respond` generates the assistant reply with bounded history and context.
+8. The assistant message is appended to Postgres and the synchronous response returns the conversation ID plus created/retrieved IDs and dedup warnings.
+
+Chat turns do not use request-level idempotency keys in v1. If the request fails after the user message is persisted, the conversation retains that message and the client may retry as a new turn.
 
 ---
 
@@ -119,19 +143,21 @@ sequenceDiagram
   participant QD as Qdrant
 
   C->>API: POST /v1/memories
-  API->>App: CreateMemoryCommand
-  App->>PG: INSERT memory (txn)
+  API->>App: createMemory
+  App->>PG: INSERT memory
   App->>PG: INSERT audit_log
+  App->>PG: mark memory_index_states pending
   App->>Q: enqueue embed-and-index
   App-->>API: Memory (indexingStatus: pending)
   API-->>C: 201 Created
 
   Q->>W: embed-and-index job
-  W->>PG: load memory
-  W->>W: chunk or atomic
+  W->>PG: load memory, verify content hash
+  W->>W: chunk to provider limit
   W->>W: embed batch
-  W->>QD: upsert points
-  W->>PG: update memory_embeddings (indexed)
+  W->>QD: upsert points, prune stale chunks
+  W->>PG: replace memory_embeddings
+  W->>PG: mark memory_index_states indexed
 ```
 
 ### 3.2 Semantic Search
@@ -146,13 +172,13 @@ sequenceDiagram
   participant PG as Postgres
 
   C->>API: POST /v1/memories/search
-  API->>App: SearchMemoriesQuery
+  API->>App: searchMemories
   App->>EP: embed(query)
   App->>QD: vector search + metadata filters
   QD-->>App: chunk hits (scores)
   App->>App: dedupe to parent memory, best chunk score
-  App->>PG: hydrate memory rows (optional)
-  App-->>API: ranked results + cursor
+  App->>PG: hydrate each hit (user-scoped)
+  App-->>API: ranked results (cursor is null today)
   API-->>C: 200 OK
 ```
 
@@ -164,25 +190,27 @@ sequenceDiagram
   participant API as API
   participant LG as LangGraph
   participant App as Application
-  participant LLM as LLMProvider
+  participant LLM as ChatModel
   participant PG as Postgres
 
   C->>API: POST /v1/chat
+  API->>PG: find/create conversation, load history
   API->>PG: persist user message
   API->>LG: run graph(state)
 
-  alt remember_intent
-    LG->>LLM: extract memories
-    LG->>App: CreateMemoryCommand (same as REST)
-    App->>PG: persist + enqueue embed
-  else recall_intent
-    LG->>App: SearchMemoriesQuery
+  LG->>LLM: classify + extract (JSON)
+  alt remember
+    LG->>App: best-effort dedup per extracted memory
+    LG->>App: createMemory (same as REST)
+    App->>PG: persist memory + index state; enqueue embed
+  else recall
+    LG->>App: searchMemories
     App-->>LG: retrieved memories
-    LG->>LG: context generation (delimited block)
+    LG->>LG: context block (delimited)
   end
 
   LG->>LLM: generate response
-  LG-->>API: response + side effects
+  LG-->>API: response + created/retrieved IDs + warnings
   API->>PG: persist assistant message
   API-->>C: 200 OK
 ```
@@ -201,6 +229,7 @@ erDiagram
   users ||--o{ idempotency_keys : owns
 
   memories ||--o{ memory_embeddings : has
+  memories ||--o| memory_index_states : has
   conversations ||--o{ conversation_messages : contains
   conversations ||--o{ memories : "optional link"
 
@@ -242,6 +271,14 @@ erDiagram
     timestamp indexed_at
   }
 
+  memory_index_states {
+    uuid memory_id PK_FK
+    string content_hash
+    enum status
+    text error
+    timestamp updated_at
+  }
+
   conversations {
     uuid id PK
     uuid user_id FK
@@ -281,19 +318,25 @@ erDiagram
 
 ### Indexes (v1)
 
+- `users (email)` (unique)
+- `refresh_tokens (user_id)`
+- `api_keys (user_id)`
+- `conversations (user_id, created_at DESC)`
 - `memories (user_id, created_at DESC)`
 - `memories (user_id, category)`
-- `memories (user_id) WHERE is_pinned = true` (partial)
-- `memories (user_id) WHERE is_archived = true` (partial)
 - `memory_embeddings (memory_id)`
-- `audit_logs (user_id, created_at DESC)`
+- `memory_index_states (status)`
 - `conversation_messages (conversation_id, created_at)`
+- `audit_logs (user_id, created_at DESC)`
+- `idempotency_keys (user_id)`
+
+The partial indexes for pinned/archived listings were designed but are **not yet in a migration**. The `idempotency_keys` table is reserved and currently unused.
 
 ---
 
 ## 5. API Contract
 
-All endpoints are prefixed with `/v1`. Mutating endpoints require `Idempotency-Key` header (Slice 5; schema defined here for completeness).
+All endpoints are prefixed with `/v1`. `Idempotency-Key` request handling (including chat) is deferred; the `idempotency_keys` schema is reserved for that work. `/metrics` remains unimplemented.
 
 ### 5.1 Auth
 
@@ -330,6 +373,8 @@ All endpoints are prefixed with `/v1`. Mutating endpoints require `Idempotency-K
   conversationId?: string;   // UUID, optional
 }
 ```
+
+`POST /v1/memories` returns `409 Conflict` with `{ existingMemoryId, similarity }` when the dedup check finds a match. Add `?force=true` to bypass the check.
 
 #### Memory Response
 
@@ -369,15 +414,14 @@ All endpoints are prefixed with `/v1`. Mutating endpoints require `Idempotency-K
 
 ```typescript
 {
-  query: string;
-  filters?: {
-    tags?: string[];
-    category?: string;
-    dateRange?: { from?: string; to?: string };
-    includeArchived?: boolean;
-  };
-  limit?: number;            // default 10, max 50
-  cursor?: string;
+  query: string;              // min 1, max 2000 chars
+  category?: string;
+  tags?: string[];            // AND semantics
+  includeArchived?: boolean;  // default false
+  from?: string;              // ISO 8601 datetime
+  to?: string;                // ISO 8601 datetime
+  limit?: number;             // default 10, max 50
+  cursor?: string;            // accepted by the schema; not used yet
 }
 ```
 
@@ -386,9 +430,11 @@ All endpoints are prefixed with `/v1`. Mutating endpoints require `Idempotency-K
 ```typescript
 {
   items: Array<MemoryResponse & { score: number }>;
-  cursor: string | null;
+  cursor: string | null; // always null in v1
 }
 ```
+
+Search hits currently report `indexingStatus: "indexed"` because they come from Qdrant; list/get/create/update resolve the durable `memory_index_states` value. Cursor-based search pagination is not implemented.
 
 ### 5.3 Chat
 
@@ -403,7 +449,7 @@ All endpoints are prefixed with `/v1`. Mutating endpoints require `Idempotency-K
 ```typescript
 {
   conversationId?: string;
-  message: string;
+  message: string; // min 1, max 10_000 chars
 }
 ```
 
@@ -413,10 +459,13 @@ All endpoints are prefixed with `/v1`. Mutating endpoints require `Idempotency-K
 {
   conversationId: string;
   message: string;
-  memoriesCreated?: string[];   // memory IDs
-  memoriesRetrieved?: string[];
+  memoriesCreated: string[];   // memory IDs persisted this turn
+  memoriesRetrieved: string[]; // memory IDs used as recall context
+  duplicateWarnings: Array<{ existingMemoryId: string; similarity: number }>;
 }
 ```
+
+`POST /v1/conversations` accepts `{ title?: string }`. `GET /v1/conversations/:id/messages` accepts `limit` (default 50, max 200) and returns messages in ascending age order. Both chat and message endpoints verify conversation ownership.
 
 ### 5.4 Admin
 
@@ -427,12 +476,14 @@ All endpoints are prefixed with `/v1`. Mutating endpoints require `Idempotency-K
 
 ### 5.5 Ops
 
-| Method | Path       | Description                         |
-| ------ | ---------- | ----------------------------------- |
-| GET    | `/health`  | Basic health                        |
-| GET    | `/ready`   | Readiness (Postgres, Redis, Qdrant) |
-| GET    | `/live`    | Liveness                            |
-| GET    | `/metrics` | Prometheus format (Slice 7)         |
+| Method | Path       | Description                                            |
+| ------ | ---------- | ------------------------------------------------------ |
+| GET    | `/health`  | Basic health                                           |
+| GET    | `/ready`   | Postgres readiness; Qdrant probed; Redis `not_checked` |
+| GET    | `/live`    | Liveness                                               |
+| GET    | `/metrics` | Prometheus format (not implemented)                    |
+
+`/ready` returns `status: "ready"` when Postgres responds. Qdrant and Redis results are informational in `checks` and do not currently gate readiness.
 
 ### 5.6 Error Shape
 
@@ -442,13 +493,17 @@ All endpoints are prefixed with `/v1`. Mutating endpoints require `Idempotency-K
   error: string;
   message: string;
   correlationId: string;
-  details?: unknown;         // validation errors only
+  existingMemoryId?: string; // 409 dedup conflict
+  similarity?: number;       // 409 dedup conflict
+  details?: unknown;         // validation errors
 }
 ```
 
 ---
 
-## 6. LangGraph State Machine
+## 6. LangGraph Chat Graph
+
+`packages/application/src/chat/` owns the graph. It is framework-free apart from LangGraph itself; the API wires Prisma/Qdrant/BullMQ adapters through ports.
 
 ### 6.1 State Schema
 
@@ -456,11 +511,16 @@ All endpoints are prefixed with `/v1`. Mutating endpoints require `Idempotency-K
 interface ChatGraphState {
   userId: string;
   conversationId: string;
+  correlationId: string;
   messages: Array<{ role: 'user' | 'assistant' | 'system'; content: string }>;
-  intent: 'remember_intent' | 'recall_intent' | 'general_chat' | null;
-  extractedMemories: Array<{ content: string; type: string; confidence: number }>;
-  retrievedMemories: Memory[];
+  latestUserMessage: string;
+  intent: 'remember' | 'recall' | 'general' | null;
+  extractedMemories: Array<{ content: string; type: 'long_term' | 'semantic'; confidence: number }>;
+  retrievedMemories: ScoredMemoryDto[];
   duplicateWarnings: Array<{ existingMemoryId: string; similarity: number }>;
+  memoriesCreated: string[];
+  createdMemoryContents: string[];
+  memoriesRetrieved: string[];
   context: string | null;
   response: string | null;
 }
@@ -468,65 +528,82 @@ interface ChatGraphState {
 
 ### 6.2 Nodes
 
-| Node                 | Responsibility                                  |
-| -------------------- | ----------------------------------------------- |
-| `intentDetection`    | Classify user message intent                    |
-| `memoryExtraction`   | Extract storable facts from message             |
-| `memoryValidation`   | Validate extracted content (length, PII policy) |
-| `duplicateDetection` | Vector similarity check; detect-only in v1      |
-| `persistMemory`      | Delegate to `CreateMemoryCommand`               |
-| `semanticRetrieval`  | Run search query from user message              |
-| `contextGeneration`  | Build delimited context block for LLM           |
-| `responseGeneration` | Produce assistant reply                         |
+| Node           | Responsibility                                                                   |
+| -------------- | -------------------------------------------------------------------------------- |
+| `classify`     | One model call: intent + candidate memory extraction as JSON; heuristic fallback |
+| `validate`     | Trim, drop invalid/oversized items, exact-dedupe, cap at 5                       |
+| `persist`      | Best-effort semantic dedup, then shared `createMemory`; collect warnings         |
+| `retrieve`     | Embedding + Qdrant search, hydrate memories, bounded by timeout                  |
+| `buildContext` | Build `<retrieved_memories>` block with a 6000-character cap                     |
+| `respond`      | Generate the assistant reply with bounded history and mode-specific context      |
 
 ### 6.3 Graph Flow
 
 ```mermaid
 stateDiagram-v2
-  [*] --> intentDetection
-  intentDetection --> memoryExtraction: remember_intent
-  intentDetection --> semanticRetrieval: recall_intent
-  intentDetection --> responseGeneration: general_chat
-  memoryExtraction --> memoryValidation
-  memoryValidation --> duplicateDetection
-  duplicateDetection --> persistMemory: no_duplicate
-  duplicateDetection --> responseGeneration: duplicate_found
-  persistMemory --> responseGeneration
-  semanticRetrieval --> contextGeneration
-  contextGeneration --> responseGeneration
-  responseGeneration --> [*]
+  [*] --> classify
+  classify --> validate: remember
+  classify --> retrieve: recall
+  classify --> respond: general
+  validate --> persist: valid memories
+  validate --> respond: nothing to store
+  persist --> respond
+  retrieve --> buildContext
+  buildContext --> respond
+  respond --> [*]
 ```
 
 ### 6.4 Boundary Rule
 
-LangGraph nodes call **application services only** (commands/queries). They never import infrastructure adapters, Prisma, or NestJS decorators.
+LangGraph nodes call **application services only** (`createMemory`, `searchMemories`) through injected ports. They never import infrastructure adapters, Prisma, or NestJS decorators. `ChatService` in the API is the composition root.
 
 ### 6.5 Prompt Injection Mitigation
 
-- Retrieved memories injected inside `<retrieved_memories>` delimiters.
-- System prompt instructs model to treat retrieved content as untrusted reference data, not instructions.
-- User message and retrieved context are clearly separated in prompt structure.
+- Retrieved memories are injected inside `<retrieved_memories>` delimiters.
+- The system prompt instructs the model to treat retrieved content as untrusted reference data, not instructions.
+- Stored-memory contents and retrieved context are never concatenated into the user message.
+- History is capped to the last 20 messages; retrieval waits at most `DEDUP_TIMEOUT_MS`.
+
+### 6.6 Dedup and Failure Behavior
+
+- The classification/extraction call and response call are separate; only two model calls per turn in the normal path.
+- `remember` runs the same shared `createMemory` use case as REST, so audit entries, index state, and BullMQ jobs stay consistent.
+- Chat dedup timeout/failure skips the check rather than blocking the write. REST dedup timeout/failure behaves the same way.
+- A failed graph after the user message is persisted does not roll back that message; v1 has no request idempotency or turn transactional boundary.
 
 ---
 
 ## 7. Port Catalog
 
-All ports live in `packages/domain/src/ports/`. Adapters in `infrastructure/`.
+All ports live in `packages/domain/src/ports/`. Adapters live in `infrastructure/` or `apps/`. The domain and application packages do not import NestJS, Prisma, BullMQ, Qdrant, or provider SDKs.
 
-| Port                 | Methods                                              | Adapter(s)       |
-| -------------------- | ---------------------------------------------------- | ---------------- |
-| `MemoryRepository`   | `save`, `findById`, `findByUser`, `update`, `delete` | Prisma           |
-| `AuditLogRepository` | `append`                                             | Prisma           |
-| `UserRepository`     | `save`, `findByEmail`, `findById`                    | Prisma           |
-| `EmbeddingProvider`  | `embed(texts[])`, `model`, `dimension`               | Ollama, OpenAI   |
-| `LLMProvider`        | `complete(messages, options?)`, `model`              | OpenAI (v1 prod) |
-| `VectorStore`        | `upsert`, `deleteByMemoryId`, `search`               | Qdrant           |
-| `JobQueue`           | `enqueue`, `registerHandler`                         | BullMQ           |
-| `IdempotencyStore`   | `get`, `set`                                         | Prisma/Redis     |
-| `ObjectStore`        | `put`, `get`                                         | S3/MinIO         |
-| `CacheStore`         | `get`, `set`, `del`                                  | Redis            |
+### 7.1 Implemented
 
-### Port Interfaces (canonical)
+| Port                     | Methods                                                                                                          | Adapter(s)                              |
+| ------------------------ | ---------------------------------------------------------------------------------------------------------------- | --------------------------------------- |
+| `MemoryRepository`       | `save`, `findById`, `findByUser`, `findAll`, `existsByIds`, `update`, `delete`                                   | Prisma, in-memory                       |
+| `MemoryIndexStateStore`  | `markPending`, `markIndexed`, `markFailed`, `findByMemoryIds`                                                    | Prisma, in-memory                       |
+| `MemoryEmbeddingStore`   | `replaceForMemory`, `markStatus`, `deleteForMemory`                                                              | Prisma, in-memory                       |
+| `AuditLogRepository`     | `append`, `findAll`                                                                                              | Prisma, in-memory                       |
+| `UserRepository`         | `save`, `findByEmail`, `findById`, `findAll`                                                                     | Prisma, in-memory                       |
+| `RefreshTokenRepository` | `save`, `findByTokenHash`, `revoke`                                                                              | Prisma, in-memory                       |
+| `ApiKeyRepository`       | `save`, `findByKeyHash`, `findById`, `findByUser`, `delete`, `updateLastUsed`                                    | Prisma, in-memory                       |
+| `ConversationRepository` | `createConversation`, `findConversation`, `appendMessage`, `listMessages`                                        | Prisma, in-memory                       |
+| `PasswordHasher`         | `hash`, `verify`                                                                                                 | bcrypt                                  |
+| `EmbeddingProvider`      | `embed(texts[])`, `model`, `dimension`, `maxInputTokens`                                                         | OpenAI-compatible (DMR, Ollama, OpenAI) |
+| `ChatModel`              | `complete(messages[], options?)`, `model`                                                                        | OpenAI-compatible (DMR, Ollama, OpenAI) |
+| `VectorStore`            | `upsert`, `deleteByMemoryId`, `deletePoints`, `listPointsByMemoryId`, `scanPoints`, `search`, `ensureCollection` | Qdrant, in-memory                       |
+| `JobQueue`               | `enqueue(name, data, { jobId, force })`                                                                          | BullMQ, in-memory                       |
+
+### 7.2 Planned
+
+| Port               | Purpose                                  | Target   |
+| ------------------ | ---------------------------------------- | -------- |
+| `IdempotencyStore` | Request-level `Idempotency-Key` handling | Deferred |
+| `ObjectStore`      | Conversation exports / eval artifacts    | Deferred |
+| `CacheStore`       | Shared cache/session storage             | Deferred |
+
+### 7.3 Port Interfaces (canonical)
 
 ```typescript
 // packages/domain/src/ports/embedding-provider.port.ts
@@ -534,12 +611,7 @@ interface EmbeddingProvider {
   embed(texts: string[]): Promise<number[][]>;
   readonly model: string;
   readonly dimension: number;
-}
-
-// packages/domain/src/ports/llm-provider.port.ts
-interface LLMProvider {
-  complete(messages: ChatMessage[], options?: CompletionOptions): Promise<string>;
-  readonly model: string;
+  readonly maxInputTokens: number;
 }
 
 // packages/domain/src/ports/memory-repository.port.ts
@@ -547,19 +619,48 @@ interface MemoryRepository {
   save(memory: Memory): Promise<void>;
   findById(userId: string, id: string): Promise<Memory | null>;
   findByUser(userId: string, query: ListMemoriesQuery): Promise<PaginatedResult<Memory>>;
+  findAll(cursor: string | undefined, limit: number): Promise<PaginatedResult<Memory>>;
+  existsByIds(ids: string[]): Promise<Set<string>>;
   update(memory: Memory): Promise<void>;
-  delete(userId: string, id: string): Promise<void>;
+  delete(userId: string, id: string): Promise<boolean>;
 }
 
 // packages/domain/src/ports/vector-store.port.ts
 interface VectorStore {
   upsert(points: VectorPoint[]): Promise<void>;
   deleteByMemoryId(memoryId: string): Promise<void>;
+  deletePoints(ids: string[]): Promise<void>;
+  listPointsByMemoryId(memoryId: string): Promise<VectorPointRef[]>;
+  scanPoints(cursor?: string | null, limit?: number): Promise<VectorScanPage>;
   search(params: VectorSearchParams): Promise<VectorSearchResult[]>;
+  ensureCollection(): Promise<void>;
+}
+
+// packages/domain/src/ports/job-queue.port.ts
+interface JobQueue {
+  enqueue(name: string, data: unknown, opts?: EnqueueOptions): Promise<void>;
+}
+
+// packages/domain/src/ports/chat-model.port.ts
+interface ChatModel {
+  complete(messages: ChatMessage[], options?: ChatCompletionOptions): Promise<string>;
+  readonly model: string;
+}
+
+// packages/domain/src/ports/conversation-repository.port.ts
+interface ConversationRepository {
+  createConversation(userId: string, title: string | null): Promise<ConversationRecord>;
+  findConversation(userId: string, id: string): Promise<ConversationRecord | null>;
+  appendMessage(
+    conversationId: string,
+    role: ConversationRole,
+    content: string,
+  ): Promise<ConversationMessageRecord>;
+  listMessages(conversationId: string, limit?: number): Promise<ConversationMessageRecord[]>;
 }
 ```
 
-Every port has a corresponding in-memory/fake adapter for unit tests.
+Every port except `PasswordHasher` has an in-memory/fake adapter for unit tests; `PasswordHasher` is bcrypt-only in v1.
 
 ---
 
@@ -567,30 +668,46 @@ Every port has a corresponding in-memory/fake adapter for unit tests.
 
 Validated at boot via Zod (`packages/shared/src/config.ts`). Application **fails fast** on missing required values.
 
-| Variable                   | Required  | Default                  | Dev           | Prod          | Description          |
-| -------------------------- | --------- | ------------------------ | ------------- | ------------- | -------------------- |
-| `NODE_ENV`                 | yes       | —                        | `development` | `production`  | Runtime mode         |
-| `PORT`                     | no        | `3000`                   | `3000`        | `3000`        | API listen port      |
-| `DATABASE_URL`             | yes       | —                        | compose       | managed       | Postgres connection  |
-| `REDIS_URL`                | yes       | —                        | compose       | managed       | Redis connection     |
-| `QDRANT_URL`               | yes       | —                        | compose       | managed       | Qdrant HTTP endpoint |
-| `QDRANT_COLLECTION`        | yes       | —                        | `smriti_dev`  | `smriti_prod` | Per-env collection   |
-| `EMBEDDING_PROVIDER`       | yes       | `ollama`                 | `ollama`      | `openai`      | Provider selection   |
-| `OLLAMA_BASE_URL`          | if ollama | `http://ollama:11434`    | ✓             | —             | Ollama API           |
-| `OLLAMA_EMBED_MODEL`       | if ollama | `nomic-embed-text`       | ✓             | —             | Embed model          |
-| `OPENAI_API_KEY`           | if openai | —                        | optional      | ✓             | OpenAI auth          |
-| `OPENAI_EMBED_MODEL`       | if openai | `text-embedding-3-small` | —             | ✓             | Embed model          |
-| `LLM_PROVIDER`             | yes       | `openai`                 | `ollama`      | `openai`      | Chat provider        |
-| `OPENAI_CHAT_MODEL`        | if openai | `gpt-4o-mini`            | —             | ✓             | Chat model           |
-| `JWT_SECRET`               | yes       | —                        | dev secret    | strong secret | Access token signing |
-| `JWT_EXPIRES_IN`           | no        | `15m`                    | ✓             | ✓             | Access token TTL     |
-| `REFRESH_TOKEN_EXPIRES_IN` | no        | `7d`                     | ✓             | ✓             | Refresh token TTL    |
-| `S3_ENDPOINT`              | no        | —                        | MinIO         | R2/S3         | Object storage       |
-| `S3_BUCKET`                | no        | `smriti`                 | ✓             | ✓             | Bucket name          |
-| `S3_ACCESS_KEY`            | if S3     | —                        | minioadmin    | IAM           | Credentials          |
-| `S3_SECRET_KEY`            | if S3     | —                        | minioadmin    | IAM           | Credentials          |
-| `LOG_LEVEL`                | no        | `info`                   | `debug`       | `info`        | Pino level           |
-| `CORRELATION_ID_HEADER`    | no        | `x-correlation-id`       | ✓             | ✓             | Request tracing      |
+| Variable                     | Required  | Default                                     | Description                                                      |
+| ---------------------------- | --------- | ------------------------------------------- | ---------------------------------------------------------------- |
+| `NODE_ENV`                   | no        | `development`                               | Runtime mode                                                     |
+| `PORT`                       | no        | `3000`                                      | API listen port                                                  |
+| `LOG_LEVEL`                  | no        | `info`                                      | Pino level                                                       |
+| `DATABASE_URL`               | yes       | —                                           | Postgres connection                                              |
+| `REDIS_URL`                  | yes       | —                                           | Redis connection (BullMQ)                                        |
+| `QDRANT_URL`                 | yes       | —                                           | Qdrant HTTP endpoint                                             |
+| `QDRANT_COLLECTION`          | no        | `smriti_dev`                                | Collection; use a per-provider name such as `smriti_dev_dmr_768` |
+| `EMBEDDING_PROVIDER`         | no        | `ollama`                                    | `ollama` \| `openai` \| `dmr`                                    |
+| `OLLAMA_BASE_URL`            | if ollama | `http://localhost:11434`                    | Ollama API                                                       |
+| `OLLAMA_EMBED_MODEL`         | no        | `nomic-embed-text`                          | Ollama embedding model (768 dims)                                |
+| `OLLAMA_CHAT_MODEL`          | no        | `llama3.2`                                  | Ollama chat model                                                |
+| `DMR_BASE_URL`               | if dmr    | `http://localhost:12434/engines/v1`         | Docker Model Runner OpenAI-compatible API                        |
+| `DMR_EMBED_MODEL`            | no        | `docker.io/ai/nomic-embed-text-v1.5:latest` | DMR embedding model (768 dims)                                   |
+| `DMR_CHAT_MODEL`             | no        | `docker.io/ai/qwen2.5:3B-Q4_K_M`            | DMR chat model                                                   |
+| `LLM_PROVIDER`               | no        | `openai`                                    | Chat provider: `ollama` \| `openai` \| `dmr`                     |
+| `OPENAI_API_KEY`             | if openai | —                                           | Required when either provider is `openai`                        |
+| `OPENAI_EMBED_MODEL`         | no        | `text-embedding-3-small`                    | OpenAI embedding model (1536 dims)                               |
+| `OPENAI_CHAT_MODEL`          | no        | `gpt-4o-mini`                               | OpenAI chat model                                                |
+| `JWT_SECRET`                 | yes       | —                                           | Access-token signing secret (min 16 chars)                       |
+| `JWT_EXPIRES_IN`             | no        | `15m`                                       | Access token TTL                                                 |
+| `REFRESH_TOKEN_EXPIRES_IN`   | no        | `7d`                                        | Refresh token TTL                                                |
+| `RATE_LIMIT_TTL`             | no        | `60`                                        | Rate-limit window (seconds)                                      |
+| `RATE_LIMIT_MAX`             | no        | `100`                                       | Requests per window                                              |
+| `DEDUP_SIMILARITY_THRESHOLD` | no        | `0.92`                                      | REST/chat duplicate threshold                                    |
+| `DEDUP_TIMEOUT_MS`           | no        | `2000`                                      | Best-effort dedup/retrieval timeout                              |
+| `RECONCILE_ENABLED`          | no        | `true`                                      | Register/remove the reconcile scheduler                          |
+| `RECONCILE_INTERVAL_MINUTES` | no        | `15`                                        | Scheduler interval                                               |
+| `RECONCILE_BATCH_SIZE`       | no        | `100`                                       | Postgres page size                                               |
+| `RECONCILE_MAX_ENQUEUE`      | no        | `500`                                       | Max repairs per run                                              |
+| `S3_ENDPOINT`                | no        | —                                           | Reserved; object storage not implemented                         |
+| `S3_BUCKET`                  | no        | `smriti`                                    | Reserved                                                         |
+| `S3_ACCESS_KEY`              | no        | —                                           | Reserved                                                         |
+| `S3_SECRET_KEY`              | no        | —                                           | Reserved                                                         |
+| `CORRELATION_ID_HEADER`      | no        | `x-correlation-id`                          | Request tracing                                                  |
+
+`pnpm docker:up` provides Postgres on `5433`, Redis on `6379`, and Qdrant on `6333`. Docker Model Runner is host-native; when API/worker run inside Compose, override `DMR_BASE_URL` with `http://model-runner.docker.internal/engines/v1`.
+
+Code defaults are `EMBEDDING_PROVIDER=ollama` and `LLM_PROVIDER=openai`; `.env.example` overrides both to `dmr` for local development.
 
 ---
 
@@ -613,17 +730,17 @@ Validated at boot via Zod (`packages/shared/src/config.ts`). Application **fails
 
 ### 9.3 Threats and Mitigations
 
-| Threat                                   | Impact                             | Mitigation                                                                                                   |
-| ---------------------------------------- | ---------------------------------- | ------------------------------------------------------------------------------------------------------------ |
-| **Prompt injection** via stored memories | LLM executes attacker instructions | Delimited context blocks; system prompt treats retrieved data as untrusted; eval suite tests injection cases |
-| **Cross-tenant data access**             | User A reads User B's memories     | All queries scoped by `user_id` from JWT/API key; repository enforces ownership                              |
-| **API key leakage**                      | Full account access                | Keys stored hashed; shown once at creation; rotation via delete + reissue                                    |
-| **Rate abuse / DoS**                     | Service degradation                | Redis-backed rate limiting per user/IP                                                                       |
-| **SQL injection**                        | Data breach                        | Prisma parameterized queries; no raw SQL without review                                                      |
-| **Idempotency replay**                   | Duplicate writes                   | Idempotency key + request hash with TTL                                                                      |
-| **Stale vector leakage after delete**    | Deleted memory still searchable    | Delete job + reconciliation; document brief consistency window                                               |
-| **Secrets in repo**                      | Credential exposure                | `.env` gitignored; platform secret store in prod                                                             |
-| **Insufficient audit trail**             | Compliance failure                 | All mutations logged with correlation ID, action, entity, content hash                                       |
+| Threat                                   | Impact                             | Mitigation                                                                                                                               |
+| ---------------------------------------- | ---------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
+| **Prompt injection** via stored memories | LLM executes attacker instructions | Delimited context blocks; system prompt treats retrieved data as untrusted; eval suite tests injection cases                             |
+| **Cross-tenant data access**             | User A reads User B's memories     | All queries scoped by `user_id` from JWT/API key; repository enforces ownership                                                          |
+| **API key leakage**                      | Full account access                | Keys stored hashed; shown once at creation; rotation via delete + reissue                                                                |
+| **Rate abuse / DoS**                     | Service degradation                | Redis-backed rate limiting per client IP (Nest throttler default, in-memory fallback); per-user tracking deferred                        |
+| **SQL injection**                        | Data breach                        | Prisma parameterized queries; no raw SQL without review                                                                                  |
+| **Duplicate indexing on retry**          | Wasted work / duplicate points     | Deterministic BullMQ job IDs + `memory_index_states` hash guards; request-level idempotency deferred                                     |
+| **Stale vector leakage after delete**    | Deleted memory still searchable    | Delete job + scheduled reconciler with Postgres existence check; document brief consistency window                                       |
+| **Secrets in repo**                      | Credential exposure                | `.env` gitignored; platform secret store in prod                                                                                         |
+| **Insufficient audit trail**             | Compliance failure                 | Memory create/update/delete are logged with correlation ID, action, entity, and content hash; auth/API-key mutations are not yet audited |
 
 ### 9.4 Auth Boundaries
 
@@ -639,47 +756,51 @@ Validated at boot via Zod (`packages/shared/src/config.ts`). Application **fails
 ```
 smriti-2.0/
 ├── apps/
-│   ├── api/              # NestJS HTTP + DI wiring only
+│   ├── api/              # NestJS HTTP + composition root
 │   └── worker/           # BullMQ consumer process
 ├── packages/
-│   ├── domain/           # Entities, value objects, port interfaces — zero framework imports
+│   ├── domain/           # Entities, value objects, port interfaces — no framework imports
 │   ├── application/      # Use cases, DTO mappers, LangGraph graph definition
-│   └── shared/           # Zod schemas, error types, config types
-├── infrastructure/       # Prisma, Qdrant, Redis, S3, provider adapters
+│   ├── shared/           # Zod schemas, error types, config types
+│   ├── harness/          # Agent loop, tool policy, retries, checkpoints/traces
+│   └── eval/             # Deterministic eval runner, scoring, gate, DMR live model
+├── infrastructure/       # Prisma, Qdrant, Redis/BullMQ, provider adapters
 ├── prisma/
 ├── docker/
 ├── docs/
-└── eval/
+└── eval/                 # Eval task fixtures and baseline
 ```
 
-**Dependency rule**: `apps → application → domain ← infrastructure`. Domain imports nothing from outer layers.
+**Dependency rule**: `apps → application → domain ← infrastructure`. `domain`, `application`, and `infrastructure` import `@smriti/shared` as a leaf shared kernel. Domain imports no NestJS, Prisma, BullMQ, Qdrant, or provider SDK code. `packages/harness` and `packages/eval` are standalone test/CI packages and are not imported by the API or worker runtime.
 
 ---
 
 ## 11. Background Jobs
 
-| Job                 | Trigger              | Idempotency key          | Retries                    |
-| ------------------- | -------------------- | ------------------------ | -------------------------- |
-| `embed-and-index`   | memory create/update | `memoryId + contentHash` | 3 with exponential backoff |
-| `delete-vectors`    | memory delete        | `memoryId`               | 3                          |
-| `reconcile-vectors` | cron (15 min)        | `runId + batchOffset`    | 1                          |
+| Job                 | Trigger                           | Idempotency key                         | Retries                    |
+| ------------------- | --------------------------------- | --------------------------------------- | -------------------------- |
+| `embed-and-index`   | memory create/update              | `jobId = {memoryId}_{contentHash}`      | 3 with exponential backoff |
+| `delete-vectors`    | memory delete                     | `jobId = memoryId`                      | 3 with exponential backoff |
+| `reconcile-vectors` | BullMQ scheduler (default 15 min) | BullMQ scheduler ID `reconcile-vectors` | 1                          |
 
-Failed jobs after max retries → DLQ → structured alert log (webhook in v1.1).
+The reconciler runs in the worker. It can force re-enqueue a memory whose job ID is terminal (`completed` or `failed`); active/waiting/delayed jobs are left untouched. `embed-and-index`/`delete-vectors` failed jobs are retained in Redis (`removeOnFail: 500`) and logged with structured fields; the scheduler-created reconcile job uses BullMQ defaults. There is no DLQ implementation in v1.
 
 ---
 
 ## 12. Testing Strategy
 
-| Layer        | Tool                            | Scope                           |
-| ------------ | ------------------------------- | ------------------------------- |
-| Domain       | Vitest + in-memory fakes        | Aggregate invariants, chunking  |
-| Application  | Vitest                          | Use cases with mocked ports     |
-| Repositories | Vitest + Testcontainers/compose | Prisma CRUD                     |
-| API          | Supertest                       | Auth, CRUD, search, idempotency |
-| Worker       | Vitest + compose                | Embed job end-to-end            |
-| LangGraph    | Vitest + `eval/` golden set     | Node behavior + regression      |
+| Layer        | Tool                     | Scope                                                                        |
+| ------------ | ------------------------ | ---------------------------------------------------------------------------- |
+| Domain       | Vitest + fakes           | Aggregate invariants, chunking, point IDs                                    |
+| Application  | Vitest + fake ports      | Use cases, chat graph (remember/recall/dedup), embedding/reconcile handlers  |
+| Repositories | Vitest + in-memory fakes | Repository port behavior; no Prisma adapter integration suite yet            |
+| API          | Supertest + Postgres     | Auth, memory CRUD/search/dedup, chat/conversations; skipped without Postgres |
+| Jobs         | Vitest + fake ports      | Embed/index, stale-chunk pruning, reconcile handlers; no worker-process test |
+| Agent loop   | `pnpm eval` gate         | Harness policy, tools, injection, retry/resume                               |
+| Chat suite   | `pnpm eval` gate         | Remember, recall, dedup, general chat, conversation writes                   |
+| Live models  | `pnpm eval:live` (DMR)   | Local exploration only; never gates CI                                       |
 
-CI runs lint, typecheck, unit tests, and docker-compose integration profile.
+`pnpm test` runs unit/application tests and the API e2e suite when Postgres is reachable. The memory/chat API specs replace embeddings, the job queue, and Qdrant with fakes; the chat spec also supplies a fake `ChatModel`. When Postgres is unavailable the suite is skipped. CI runs format check, lint, typecheck, migrations, tests, the deterministic eval gate, and Docker image builds, with Postgres and Redis service containers (no Qdrant).
 
 ---
 
@@ -691,3 +812,6 @@ CI runs lint, typecheck, unit tests, and docker-compose integration profile.
 - [ADR-004: Embedding provider split](../adr/ADR-004-embedding-provider-split.md)
 - [ADR-005: Phased memory types](../adr/ADR-005-phased-memory-types.md)
 - [ADR-006: Dedup detect-only in v1](../adr/ADR-006-dedup-detect-only.md)
+- [ADR-007: Docker Model Runner as local default](../adr/ADR-007-docker-model-runner.md)
+- [ADR-008: Agent harness and eval gate](../adr/ADR-008-agent-harness-eval-gate.md)
+- [ADR-009: LangGraph chat orchestration](../adr/ADR-009-langgraph-chat-orchestration.md)

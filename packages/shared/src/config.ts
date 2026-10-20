@@ -15,6 +15,7 @@ export const ConfigSchema = z
     EMBEDDING_PROVIDER: EmbeddingProviderSchema.default('ollama'),
     OLLAMA_BASE_URL: z.string().url().default('http://localhost:11434'),
     OLLAMA_EMBED_MODEL: z.string().default('nomic-embed-text'),
+    OLLAMA_CHAT_MODEL: z.string().default('llama3.2'),
     DMR_BASE_URL: z.string().url().default('http://localhost:12434/engines/v1'),
     DMR_EMBED_MODEL: z.string().default('docker.io/ai/nomic-embed-text-v1.5:latest'),
     DMR_CHAT_MODEL: z.string().default('docker.io/ai/qwen2.5:3B-Q4_K_M'),
@@ -27,6 +28,15 @@ export const ConfigSchema = z
     REFRESH_TOKEN_EXPIRES_IN: z.string().default('7d'),
     RATE_LIMIT_TTL: z.coerce.number().int().positive().default(60),
     RATE_LIMIT_MAX: z.coerce.number().int().positive().default(100),
+    DEDUP_SIMILARITY_THRESHOLD: z.coerce.number().min(0).max(1).default(0.92),
+    DEDUP_TIMEOUT_MS: z.coerce.number().int().positive().max(30_000).default(2_000),
+    RECONCILE_ENABLED: z
+      .enum(['true', 'false'])
+      .default('true')
+      .transform((value) => value === 'true'),
+    RECONCILE_INTERVAL_MINUTES: z.coerce.number().int().positive().default(15),
+    RECONCILE_BATCH_SIZE: z.coerce.number().int().positive().max(1000).default(100),
+    RECONCILE_MAX_ENQUEUE: z.coerce.number().int().positive().max(10000).default(500),
     S3_ENDPOINT: z.string().url().optional(),
     S3_BUCKET: z.string().default('smriti'),
     S3_ACCESS_KEY: z.string().optional(),

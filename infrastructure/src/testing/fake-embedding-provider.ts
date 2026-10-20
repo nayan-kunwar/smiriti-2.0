@@ -3,6 +3,7 @@ import type { EmbeddingProvider } from '@smriti/domain';
 export class FakeEmbeddingProvider implements EmbeddingProvider {
   readonly model = 'fake-embed';
   readonly dimension = 4;
+  readonly maxInputTokens = 900;
 
   async embed(texts: string[]): Promise<number[][]> {
     return texts.map((t) => {

@@ -35,8 +35,9 @@ export class MemoryController {
     @CurrentUserId() userId: string,
     @CorrelationId() correlationId: string,
     @Body(new ZodValidationPipe(CreateMemorySchema)) body: CreateMemoryInput,
+    @Query('force') force?: string,
   ) {
-    return this.memoryService.create(userId, correlationId, body);
+    return this.memoryService.create(userId, correlationId, body, force === 'true');
   }
 
   @Get()

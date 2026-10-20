@@ -25,6 +25,7 @@ export const ExpectationSchema = z.object({
     .optional(),
   forbiddenTools: z.array(z.string()).optional(),
   memoryCount: z.number().int().nonnegative().optional(),
+  memoriesCreated: z.number().int().nonnegative().optional(),
   memories: z
     .array(
       z.object({
@@ -33,47 +34,71 @@ export const ExpectationSchema = z.object({
       }),
     )
     .optional(),
+  responseIncludes: z.array(z.string()).optional(),
+  conversationMessages: z.number().int().nonnegative().optional(),
+  duplicateCount: z.number().int().nonnegative().optional(),
+  retrievedContains: z.array(z.string()).optional(),
 });
 
-export const TaskSchema = z.object({
-  id: z.string().min(1),
-  suite: z.string().min(1),
-  seed: z.number().int(),
-  input: z.object({ messages: z.array(MessageSchema).min(1) }),
-  fixtures: z
-    .object({
-      memories: z
-        .array(
-          z.object({
-            content: z.string().min(1),
-            type: z.enum(['long_term', 'semantic']),
-            tags: z.array(z.string()).optional(),
-          }),
-        )
-        .optional(),
-    })
-    .optional(),
-  scriptedModel: z.array(ScriptStepSchema).min(1).optional(),
-  policy: z
-    .object({
-      maxSteps: z.number().int().positive().optional(),
-      timeoutMs: z.number().int().positive().optional(),
-      maxRetries: z.number().int().nonnegative().optional(),
-      maxContextChars: z.number().int().positive().optional(),
-    })
-    .optional(),
-  resumeAfterStep: z.number().int().positive().optional(),
-  hangTool: z.string().optional(),
-  injectFailures: z
-    .array(
-      z.object({
-        tool: z.string(),
-        times: z.number().int().positive(),
-      }),
-    )
-    .optional(),
-  expect: ExpectationSchema,
-});
+export const TaskSchema = z
+  .object({
+    id: z.string().min(1),
+    suite: z.string().min(1),
+    kind: z.enum(['agent', 'chat']).default('agent'),
+    seed: z.number().int(),
+    input: z.object({ messages: z.array(MessageSchema).min(1) }),
+    fixtures: z
+      .object({
+        memories: z
+          .array(
+            z.object({
+              content: z.string().min(1),
+              type: z.enum(['long_term', 'semantic']),
+              tags: z.array(z.string()).optional(),
+            }),
+          )
+          .optional(),
+      })
+      .optional(),
+    scriptedModel: z.array(ScriptStepSchema).min(1).optional(),
+    /** Scripted chat-model outputs for `kind: "chat"`: classification, then response. */
+    chatScript: z.array(z.string()).min(1).optional(),
+    policy: z
+      .object({
+        maxSteps: z.number().int().positive().optional(),
+        timeoutMs: z.number().int().positive().optional(),
+        maxRetries: z.number().int().nonnegative().optional(),
+        maxContextChars: z.number().int().positive().optional(),
+      })
+      .optional(),
+    resumeAfterStep: z.number().int().positive().optional(),
+    hangTool: z.string().optional(),
+    injectFailures: z
+      .array(
+        z.object({
+          tool: z.string(),
+          times: z.number().int().positive(),
+        }),
+      )
+      .optional(),
+    expect: ExpectationSchema,
+  })
+  .superRefine((task, ctx) => {
+    if (task.kind === 'chat' && !task.chatScript?.length) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'chat tasks require chatScript',
+        path: ['chatScript'],
+      });
+    }
+    if (task.kind === 'agent' && !task.scriptedModel?.length) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'agent tasks require scriptedModel',
+        path: ['scriptedModel'],
+      });
+    }
+  });
 
 export type Expectation = z.infer<typeof ExpectationSchema>;
 export type EvalTask = z.infer<typeof TaskSchema>;

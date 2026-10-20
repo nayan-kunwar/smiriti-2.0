@@ -8,6 +8,7 @@ import { HealthModule } from './health/health.module.js';
 import { MemoryModule } from './memory/memory.module.js';
 import { AuthModule } from './auth/auth.module.js';
 import { AdminModule } from './admin/admin.module.js';
+import { ChatModule } from './chat/chat.module.js';
 import { GlobalExceptionFilter } from './common/filters/global-exception.filter.js';
 import { CorrelationIdMiddleware } from './common/middleware/correlation-id.middleware.js';
 
@@ -38,6 +39,7 @@ import { CorrelationIdMiddleware } from './common/middleware/correlation-id.midd
     AuthModule,
     AdminModule,
     MemoryModule,
+    ChatModule,
   ],
   providers: [{ provide: APP_FILTER, useClass: GlobalExceptionFilter }],
 })

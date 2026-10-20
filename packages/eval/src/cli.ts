@@ -2,6 +2,7 @@ import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseJsonl } from '@smriti/harness';
+import { OpenAICompatibleChatModel } from '@smriti/infrastructure';
 import { diffTraces } from './diff.js';
 import { DEFAULT_DMR_BASE_URL, DEFAULT_DMR_CHAT_MODEL, dmrModel } from './dmr-model.js';
 import { runEval } from './runner.js';
@@ -47,6 +48,7 @@ async function main(): Promise<void> {
       tasksDir: path.join(repoRoot, 'eval', 'tasks'),
       reportsDir: path.join(repoRoot, 'eval', 'reports'),
       modelFactory: () => dmrModel({ baseUrl, model }),
+      chatModelFactory: () => new OpenAICompatibleChatModel({ baseUrl, model }),
       ...(taskFilter ? { taskFilter } : {}),
     });
     printReport(report, path.join(repoRoot, 'eval', 'reports'));

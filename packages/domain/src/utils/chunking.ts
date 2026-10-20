@@ -1,3 +1,5 @@
+import { createHash } from 'node:crypto';
+
 export interface TextChunk {
   index: number;
   text: string;
@@ -14,14 +16,21 @@ export function estimateTokens(text: string): number {
   return Math.max(1, Math.ceil(text.length / CHARS_PER_TOKEN));
 }
 
-export function chunkMemoryContent(content: string): TextChunk[] {
+export function chunkMemoryContent(
+  content: string,
+  maxInputTokens = CHUNK_TOKEN_SIZE,
+): TextChunk[] {
+  const tokenLimit = Math.max(1, maxInputTokens);
   const totalTokens = estimateTokens(content);
-  if (totalTokens <= ATOMIC_TOKEN_LIMIT) {
+  const atomicTokenLimit = Math.min(ATOMIC_TOKEN_LIMIT, tokenLimit);
+  if (totalTokens <= atomicTokenLimit) {
     return [{ index: 0, text: content, tokenCount: totalTokens }];
   }
 
-  const chunkChars = CHUNK_TOKEN_SIZE * CHARS_PER_TOKEN;
-  const overlapChars = CHUNK_OVERLAP_TOKENS * CHARS_PER_TOKEN;
+  const chunkTokenSize = Math.min(CHUNK_TOKEN_SIZE, tokenLimit);
+  const overlapTokenSize = Math.min(CHUNK_OVERLAP_TOKENS, Math.floor(chunkTokenSize / 4));
+  const chunkChars = chunkTokenSize * CHARS_PER_TOKEN;
+  const overlapChars = overlapTokenSize * CHARS_PER_TOKEN;
   const step = Math.max(1, chunkChars - overlapChars);
 
   const chunks: TextChunk[] = [];
@@ -36,7 +45,23 @@ export function chunkMemoryContent(content: string): TextChunk[] {
   return chunks;
 }
 
+const QDRANT_POINT_NAMESPACE = '6ba7b810-9dad-11d1-80b4-00c04fd430c8';
+
+/**
+ * Qdrant point IDs must be unsigned integers or UUIDs, so chunk indices
+ * cannot be suffixed to the memory UUID. Chunk 0 keeps the memory ID for
+ * backwards compatibility; later chunks use a deterministic UUIDv5.
+ */
 export function qdrantPointId(memoryId: string, chunkIndex: number): string {
   if (chunkIndex === 0) return memoryId;
-  return `${memoryId}_${chunkIndex}`;
+  return uuidV5(`${memoryId}:${chunkIndex}`, QDRANT_POINT_NAMESPACE);
+}
+
+function uuidV5(name: string, namespace: string): string {
+  const namespaceBytes = Buffer.from(namespace.replaceAll('-', ''), 'hex');
+  const hash = createHash('sha1').update(namespaceBytes).update(name).digest();
+  hash[6] = (hash[6] & 0x0f) | 0x50;
+  hash[8] = (hash[8] & 0x3f) | 0x80;
+  const hex = hash.subarray(0, 16).toString('hex');
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20, 32)}`;
 }

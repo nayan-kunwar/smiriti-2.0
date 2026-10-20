@@ -1,0 +1,22 @@
+{
+  "id": "chat-recall-paris",
+  "suite": "chat",
+  "kind": "chat",
+  "seed": 12,
+  "input": {
+    "messages": [{ "role": "user", "content": "Where do I live?" }]
+  },
+  "fixtures": {
+    "memories": [{ "content": "I live in Paris", "type": "long_term" }]
+  },
+  "chatScript": ["{\"intent\":\"recall\",\"memories\":[]}", "You live in Paris."],
+  "expect": {
+    "status": "completed",
+    "memoryCount": 1,
+    "memoriesCreated": 0,
+    "responseIncludes": ["Paris"],
+    "retrievedContains": ["Paris"],
+    "conversationMessages": 2,
+    "duplicateCount": 0
+  }
+}

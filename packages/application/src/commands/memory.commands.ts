@@ -1,10 +1,18 @@
-import type { AuditLogRepository, JobQueue, MemoryRepository } from '@smriti/domain';
+import type {
+  AuditLogRepository,
+  JobQueue,
+  MemoryIndexStateStore,
+  MemoryRepository,
+} from '@smriti/domain';
 import { DELETE_VECTORS_JOB, EMBED_AND_INDEX_JOB } from '@smriti/domain';
 import { NotFoundError } from '@smriti/shared';
+import { resolveIndexingStatus, resolveIndexingStatuses } from '../indexing/indexing-status.js';
 import { toMemoryDto, type MemoryDto } from '../mappers/memory.mapper.js';
 
 export interface GetMemoryDeps {
   memoryRepository: MemoryRepository;
+  indexStateStore?: MemoryIndexStateStore;
+  indexingEnabled?: boolean;
 }
 
 export async function getMemory(
@@ -16,11 +24,17 @@ export async function getMemory(
   if (!memory) {
     throw new NotFoundError('Memory', id);
   }
-  return toMemoryDto(memory);
+  const indexingEnabled = deps.indexingEnabled ?? Boolean(deps.indexStateStore);
+  const state = indexingEnabled
+    ? (await deps.indexStateStore?.findByMemoryIds([memory.id]))?.get(memory.id)
+    : undefined;
+  return toMemoryDto(memory, resolveIndexingStatus(memory, state, indexingEnabled));
 }
 
 export interface ListMemoriesDeps {
   memoryRepository: MemoryRepository;
+  indexStateStore?: MemoryIndexStateStore;
+  indexingEnabled?: boolean;
 }
 
 export async function listMemories(
@@ -36,8 +50,14 @@ export async function listMemories(
   },
 ): Promise<{ items: MemoryDto[]; cursor: string | null }> {
   const result = await deps.memoryRepository.findByUser(userId, query);
+  const indexingEnabled = deps.indexingEnabled ?? Boolean(deps.indexStateStore);
+  const statuses = await resolveIndexingStatuses(
+    deps.indexStateStore,
+    result.items,
+    indexingEnabled,
+  );
   return {
-    items: result.items.map((m) => toMemoryDto(m)),
+    items: result.items.map((m) => toMemoryDto(m, statuses.get(m.id))),
     cursor: result.nextCursor,
   };
 }
@@ -46,6 +66,7 @@ export interface UpdateMemoryDeps {
   memoryRepository: MemoryRepository;
   auditLogRepository: AuditLogRepository;
   jobQueue?: JobQueue;
+  indexStateStore?: MemoryIndexStateStore;
 }
 
 export interface UpdateMemoryContext {
@@ -91,6 +112,7 @@ export async function updateMemory(
 
   const contentChanged = input.content !== undefined;
   if (contentChanged && deps.jobQueue) {
+    await deps.indexStateStore?.markPending(memory.id, memory.contentHash);
     await deps.jobQueue.enqueue(
       EMBED_AND_INDEX_JOB,
       {

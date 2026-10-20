@@ -69,7 +69,7 @@ describe.skipIf(!dbAvailable)('Auth API (e2e)', () => {
       .expect(200);
 
     adminAccessToken = adminLogin.body.accessToken;
-  });
+  }, 30_000);
 
   afterAll(async () => {
     if (!app) return;

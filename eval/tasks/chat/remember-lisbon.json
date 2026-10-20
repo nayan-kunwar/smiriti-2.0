@@ -1,0 +1,22 @@
+{
+  "id": "chat-remember-lisbon",
+  "suite": "chat",
+  "kind": "chat",
+  "seed": 11,
+  "input": {
+    "messages": [{ "role": "user", "content": "Remember that I live in Lisbon." }]
+  },
+  "chatScript": [
+    "{\"intent\":\"remember\",\"memories\":[{\"content\":\"I live in Lisbon\",\"type\":\"long_term\",\"confidence\":0.9}]}",
+    "Noted — you live in Lisbon."
+  ],
+  "expect": {
+    "status": "completed",
+    "memoryCount": 1,
+    "memoriesCreated": 1,
+    "memories": [{ "contentIncludes": "Lisbon", "type": "long_term" }],
+    "responseIncludes": ["Lisbon"],
+    "conversationMessages": 2,
+    "duplicateCount": 0
+  }
+}

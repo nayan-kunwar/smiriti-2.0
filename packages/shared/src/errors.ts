@@ -23,7 +23,10 @@ export class ValidationError extends DomainError {
 }
 
 export class ConflictError extends DomainError {
-  constructor(message: string) {
+  constructor(
+    message: string,
+    public readonly details?: Record<string, unknown>,
+  ) {
     super(message, 'CONFLICT');
     this.name = 'ConflictError';
   }

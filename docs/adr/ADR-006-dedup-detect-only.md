@@ -1,7 +1,7 @@
 # ADR-006: Duplicate Detection — Detect and Warn in v1, Merge in v2
 
-**Status**: Accepted  
-**Date**: 2026-08-01  
+**Status**: Accepted; implemented
+**Date**: 2026-08-01
 **Deciders**: Engineering
 
 ## Context
@@ -19,14 +19,14 @@ Alternatives considered:
 
 **v1 duplicate handling is detect-only:**
 
-1. On memory create (REST or LangGraph `duplicateDetection` node), compute embedding of new content.
-2. Search existing user memories above similarity threshold (e.g. cosine > 0.92).
+1. On memory create (REST) or in the chat graph's `persist` node, search existing user memories with the new content embedding.
+2. Treat a top match at or above the similarity threshold (default `0.92`) as a duplicate.
 3. If duplicate found:
-   - **REST**: return `409 Conflict` with `{ existingMemoryId, similarity }` unless `?force=true` query param (admin/debug).
-   - **LangGraph**: skip persist, include warning in response ("I already know you live in NYC").
+   - **REST**: return `409 Conflict` with `{ existingMemoryId, similarity }` unless the authenticated owner passes `?force=true` (not admin-restricted in v1).
+   - **Chat**: skip persistence for that extracted memory and return a `duplicateWarnings` entry; the assistant is prompted to mention the existing memory.
 4. No automatic merge, no content fusion, no duplicate row deletion in v1.
 
-Threshold and behavior are configurable via env (`DEDUP_SIMILARITY_THRESHOLD`, default `0.92`).
+Threshold and timeout are configurable via env (`DEDUP_SIMILARITY_THRESHOLD`, default `0.92`; `DEDUP_TIMEOUT_MS`, default `2000`). Dedup is best-effort: if embedding, Qdrant, or the timeout fails, the write proceeds and async indexing remains the recovery path.
 
 ## Consequences
 
@@ -50,6 +50,7 @@ Threshold and behavior are configurable via env (`DEDUP_SIMILARITY_THRESHOLD`, d
 
 ## Compliance
 
-- `duplicateDetection` LangGraph node uses `VectorStore.search` scoped to `user_id`.
-- REST create endpoint checks dedup before Postgres write (after Slice 3 embedding pipeline).
-- Audit log records `memory.create.skipped_duplicate` when duplicate detected.
+- REST create calls an optional `duplicateDetector` before the Postgres write; `?force=true` bypasses it.
+- The chat `persist` node runs the same search per extracted memory and skips duplicates.
+- Both paths use Qdrant results hydrated through the user-scoped `MemoryRepository`.
+- No audit event is written for a rejected duplicate in v1; the request is logged with its correlation ID.

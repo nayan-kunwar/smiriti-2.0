@@ -33,9 +33,23 @@ export interface VectorSearchResult {
   score: number;
 }
 
+export interface VectorPointRef {
+  id: string;
+  memoryId: string;
+  chunkIndex: number;
+}
+
+export interface VectorScanPage {
+  points: VectorPointRef[];
+  nextCursor: string | null;
+}
+
 export interface VectorStore {
   upsert(points: VectorPoint[]): Promise<void>;
   deleteByMemoryId(memoryId: string): Promise<void>;
+  deletePoints(ids: string[]): Promise<void>;
+  listPointsByMemoryId(memoryId: string): Promise<VectorPointRef[]>;
+  scanPoints(cursor?: string | null, limit?: number): Promise<VectorScanPage>;
   search(params: VectorSearchParams): Promise<VectorSearchResult[]>;
   ensureCollection(): Promise<void>;
 }

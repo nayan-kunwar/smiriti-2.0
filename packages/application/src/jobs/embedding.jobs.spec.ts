@@ -5,10 +5,15 @@ import {
   type JobQueue,
   type ListMemoriesQuery,
   type MemoryEmbeddingStore,
+  type MemoryIndexStateRecord,
+  type MemoryIndexStateStore,
   type MemoryRepository,
   type PaginatedResult,
   type VectorSearchParams,
   type VectorSearchResult,
+  type VectorPoint,
+  type VectorPointRef,
+  type VectorScanPage,
   type VectorStore,
   type AuditLogRepository,
 } from '@smriti/domain';
@@ -28,6 +33,22 @@ class FakeMemoryRepo implements MemoryRepository {
   async findByUser(userId: string, _q: ListMemoriesQuery): Promise<PaginatedResult<Memory>> {
     const items = [...this.map.values()].filter((m) => m.userId === userId);
     return { items, nextCursor: null };
+  }
+  async findAll(cursor: string | undefined, limit: number): Promise<PaginatedResult<Memory>> {
+    const items = [...this.map.values()].sort((a, b) => a.id.localeCompare(b.id));
+    let start = 0;
+    if (cursor) {
+      const index = items.findIndex((m) => m.id === cursor);
+      start = index >= 0 ? index + 1 : 0;
+    }
+    const page = items.slice(start, start + limit);
+    return {
+      items: page,
+      nextCursor: start + limit < items.length ? (page[page.length - 1]?.id ?? null) : null,
+    };
+  }
+  async existsByIds(ids: string[]): Promise<Set<string>> {
+    return new Set(ids.filter((id) => this.map.has(id)));
   }
   async update(m: Memory): Promise<void> {
     this.map.set(m.id, m);
@@ -56,6 +77,7 @@ class FakeQueue implements JobQueue {
 class FakeEmbed implements EmbeddingProvider {
   readonly model = 'fake';
   readonly dimension = 4;
+  readonly maxInputTokens = 900;
   async embed(texts: string[]): Promise<number[][]> {
     return texts.map((t) => {
       let h = 0;
@@ -72,20 +94,46 @@ class FakeVectors implements VectorStore {
     { vector: number[]; userId: string; memoryId: string; chunkIndex: number }
   >();
   async ensureCollection(): Promise<void> {}
-  async upsert(
-    points: Array<{
-      id: string;
-      vector: number[];
-      payload: { userId: string; memoryId: string; chunkIndex: number };
-    }>,
-  ): Promise<void> {
-    for (const p of points) this.pts.set(p.id, { vector: p.vector, ...p.payload });
+  async upsert(points: VectorPoint[]): Promise<void> {
+    for (const p of points) {
+      this.pts.set(p.id, {
+        vector: p.vector,
+        userId: p.payload.userId,
+        memoryId: p.payload.memoryId,
+        chunkIndex: p.payload.chunkIndex,
+      });
+    }
   }
   async deleteByMemoryId(memoryId: string): Promise<void> {
     for (const [id, p] of this.pts) {
       if (p.memoryId === memoryId || id === memoryId || id.startsWith(`${memoryId}_`))
         this.pts.delete(id);
     }
+  }
+  async deletePoints(ids: string[]): Promise<void> {
+    for (const id of ids) this.pts.delete(id);
+  }
+  async listPointsByMemoryId(memoryId: string): Promise<VectorPointRef[]> {
+    return [...this.pts.entries()]
+      .filter(([, p]) => p.memoryId === memoryId)
+      .map(([id, p]) => ({ id, memoryId: p.memoryId, chunkIndex: p.chunkIndex }));
+  }
+  async scanPoints(cursor?: string | null, limit = 256): Promise<VectorScanPage> {
+    const items = [...this.pts.entries()].sort(([a], [b]) => a.localeCompare(b));
+    let start = 0;
+    if (cursor) {
+      const index = items.findIndex(([id]) => id === cursor);
+      start = index >= 0 ? index + 1 : 0;
+    }
+    const page = items.slice(start, start + limit);
+    return {
+      points: page.map(([id, p]) => ({
+        id,
+        memoryId: p.memoryId,
+        chunkIndex: p.chunkIndex,
+      })),
+      nextCursor: start + limit < items.length ? (page[page.length - 1]?.[0] ?? null) : null,
+    };
   }
   async search(params: VectorSearchParams): Promise<VectorSearchResult[]> {
     const out: VectorSearchResult[] = [];
@@ -108,6 +156,61 @@ class FakeEmbeddingStore implements MemoryEmbeddingStore {
   }
 }
 
+class FakeIndexStateStore implements MemoryIndexStateStore {
+  readonly states = new Map<string, MemoryIndexStateRecord>();
+
+  async markPending(memoryId: string, contentHash: string): Promise<void> {
+    this.states.set(memoryId, {
+      memoryId,
+      contentHash,
+      status: 'pending',
+      error: null,
+      updatedAt: new Date(),
+    });
+  }
+
+  async markIndexed(memoryId: string, contentHash: string): Promise<void> {
+    const state = this.states.get(memoryId);
+    if (!state) {
+      this.states.set(memoryId, {
+        memoryId,
+        contentHash,
+        status: 'indexed',
+        error: null,
+        updatedAt: new Date(),
+      });
+      return;
+    }
+    if (state.contentHash !== contentHash) return;
+    this.states.set(memoryId, { ...state, status: 'indexed', error: null });
+  }
+
+  async markFailed(memoryId: string, contentHash: string, error: string): Promise<void> {
+    const state = this.states.get(memoryId);
+    if (!state) {
+      this.states.set(memoryId, {
+        memoryId,
+        contentHash,
+        status: 'failed',
+        error,
+        updatedAt: new Date(),
+      });
+      return;
+    }
+    if (state.contentHash !== contentHash) return;
+    this.states.set(memoryId, { ...state, status: 'failed', error });
+  }
+
+  async findByMemoryIds(memoryIds: string[]): Promise<Map<string, MemoryIndexStateRecord>> {
+    const result = new Map<string, MemoryIndexStateRecord>();
+    for (const id of memoryIds) {
+      const state = this.states.get(id);
+      if (state) result.set(id, { ...state });
+    }
+    return result;
+  }
+}
+
 describe('vector pipeline', () => {
   it('enqueues embed job on create, indexes, searches, and deletes', async () => {
     const memoryRepo = new FakeMemoryRepo();
@@ -116,13 +219,20 @@ describe('vector pipeline', () => {
     const embedding = new FakeEmbed();
     const vectors = new FakeVectors();
     const embeddingStore = new FakeEmbeddingStore();
+    const indexStateStore = new FakeIndexStateStore();
 
     const dto = await createMemory(
-      { memoryRepository: memoryRepo, auditLogRepository: auditRepo, jobQueue },
+      {
+        memoryRepository: memoryRepo,
+        auditLogRepository: auditRepo,
+        jobQueue,
+        indexStateStore,
+      },
       { userId: 'user-1', correlationId: 'corr-1' },
       { type: 'long_term', content: 'I live in NYC and love pizza' },
     );
     expect(dto.indexingStatus).toBe('pending');
+    expect(indexStateStore.states.get(dto.id)?.status).toBe('pending');
     expect(jobQueue.jobs).toHaveLength(1);
     expect(jobQueue.jobs[0].name).toBe('embed-and-index');
 
@@ -138,10 +248,13 @@ describe('vector pipeline', () => {
         embeddingProvider: embedding,
         vectorStore: vectors,
         embeddingStore,
+        indexStateStore,
         embeddingProviderName: 'fake',
       },
       payload,
     );
+
+    expect(indexStateStore.states.get(dto.id)?.status).toBe('indexed');
 
     const result = await searchMemories(
       { memoryRepository: memoryRepo, embeddingProvider: embedding, vectorStore: vectors },
@@ -169,6 +282,7 @@ describe('vector pipeline', () => {
     const embedding = new FakeEmbed();
     const vectors = new FakeVectors();
     const embeddingStore = new FakeEmbeddingStore();
+    const indexStateStore = new FakeIndexStateStore();
 
     const memory = Memory.create({
       userId: 'u',
@@ -185,14 +299,72 @@ describe('vector pipeline', () => {
         embeddingProvider: embedding,
         vectorStore: vectors,
         embeddingStore,
+        indexStateStore,
         embeddingProviderName: 'fake',
       },
       { memoryId: memory.id, userId: 'u', contentHash: 'stale-hash', correlationId: 'c' },
     );
+    expect(indexStateStore.states.has(memory.id)).toBe(false);
     const result = await searchMemories(
       { memoryRepository: memoryRepo, embeddingProvider: embedding, vectorStore: vectors },
       { userId: 'u', query: 'updated', limit: 10 },
     );
     expect(result.items).toHaveLength(0);
+  });
+
+  it('prunes stale chunk points when content shrinks', async () => {
+    const memoryRepo = new FakeMemoryRepo();
+    const embedding = new FakeEmbed();
+    const vectors = new FakeVectors();
+    const embeddingStore = new FakeEmbeddingStore();
+    const indexStateStore = new FakeIndexStateStore();
+
+    const memory = Memory.create({
+      userId: 'u',
+      type: 'semantic',
+      content: 'alpha beta gamma delta '.repeat(300),
+    });
+    await memoryRepo.save(memory);
+
+    await handleEmbedAndIndex(
+      {
+        memoryRepository: memoryRepo,
+        embeddingProvider: embedding,
+        vectorStore: vectors,
+        embeddingStore,
+        indexStateStore,
+        embeddingProviderName: 'fake',
+      },
+      {
+        memoryId: memory.id,
+        userId: 'u',
+        contentHash: memory.contentHash,
+        correlationId: 'c',
+      },
+    );
+    expect((await vectors.listPointsByMemoryId(memory.id)).length).toBeGreaterThan(1);
+
+    memory.update({ content: 'short content after edit' });
+    await memoryRepo.update(memory);
+    await handleEmbedAndIndex(
+      {
+        memoryRepository: memoryRepo,
+        embeddingProvider: embedding,
+        vectorStore: vectors,
+        embeddingStore,
+        indexStateStore,
+        embeddingProviderName: 'fake',
+      },
+      {
+        memoryId: memory.id,
+        userId: 'u',
+        contentHash: memory.contentHash,
+        correlationId: 'c',
+      },
+    );
+
+    const remaining = await vectors.listPointsByMemoryId(memory.id);
+    expect(remaining).toHaveLength(1);
+    expect(remaining[0].chunkIndex).toBe(0);
   });
 });

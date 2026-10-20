@@ -10,6 +10,8 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@langchain/core": "^1.2.19",
+    "@langchain/langgraph": "^1.5.1",
     "@smriti/domain": "workspace:*",
     "@smriti/shared": "workspace:*"
   },

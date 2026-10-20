@@ -53,6 +53,7 @@ export class GlobalExceptionFilter implements ExceptionFilter {
 
     if (exception instanceof ConflictError) {
       response.status(HttpStatus.CONFLICT).json({
+        ...(exception.details ?? {}),
         statusCode: HttpStatus.CONFLICT,
         error: 'Conflict',
         message: exception.message,

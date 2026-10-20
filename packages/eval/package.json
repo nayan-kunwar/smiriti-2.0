@@ -18,7 +18,10 @@
     "eval": "node dist/cli.js"
   },
   "dependencies": {
+    "@smriti/application": "workspace:^",
+    "@smriti/domain": "workspace:^",
     "@smriti/harness": "workspace:*",
+    "@smriti/infrastructure": "workspace:^",
     "zod": "^3.24.1"
   },
   "devDependencies": {

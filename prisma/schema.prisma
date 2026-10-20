@@ -94,6 +94,7 @@ model Memory {
   user         User              @relation(fields: [userId], references: [id], onDelete: Cascade)
   conversation Conversation?     @relation(fields: [conversationId], references: [id], onDelete: SetNull)
   embeddings   MemoryEmbedding[]
+  indexState   MemoryIndexState?
 
   @@index([userId, createdAt(sort: Desc)])
   @@index([userId, category])
@@ -116,6 +117,19 @@ model MemoryEmbedding {
 
   @@index([memoryId])
   @@map("memory_embeddings")
+}
+
+model MemoryIndexState {
+  memoryId    String          @id @map("memory_id") @db.Uuid
+  contentHash String          @map("content_hash")
+  status      EmbeddingStatus @default(pending)
+  error       String?         @db.Text
+  updatedAt   DateTime        @updatedAt @map("updated_at")
+
+  memory Memory @relation(fields: [memoryId], references: [id], onDelete: Cascade)
+
+  @@index([status])
+  @@map("memory_index_states")
 }
 
 model Conversation {

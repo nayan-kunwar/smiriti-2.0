@@ -6,7 +6,7 @@
 
 ## Context
 
-Smriti integrates multiple external systems (Postgres, Qdrant, Redis, BullMQ, OpenAI, Ollama) and an agentic LangGraph workflow. We need a structure that keeps domain logic testable, swappable, and understandable by a small team without pattern overload.
+Smriti integrates multiple external systems (Postgres, Qdrant, Redis, BullMQ, Docker Model Runner, OpenAI, Ollama) and an agentic LangGraph workflow. We need a structure that keeps domain logic testable, swappable, and understandable by a small team without pattern overload.
 
 Alternatives considered:
 

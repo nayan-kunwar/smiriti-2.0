@@ -1,5 +1,7 @@
 import type {
   VectorPoint,
+  VectorPointRef,
+  VectorScanPage,
   VectorSearchParams,
   VectorSearchResult,
   VectorStore,
@@ -33,6 +35,39 @@ export class InMemoryVectorStore implements VectorStore {
         this.points.delete(id);
       }
     }
+  }
+
+  async deletePoints(ids: string[]): Promise<void> {
+    for (const id of ids) this.points.delete(id);
+  }
+
+  async listPointsByMemoryId(memoryId: string): Promise<VectorPointRef[]> {
+    return [...this.points.values()]
+      .filter((p) => p.payload.memoryId === memoryId)
+      .map((p) => ({
+        id: p.id,
+        memoryId: p.payload.memoryId,
+        chunkIndex: p.payload.chunkIndex,
+      }));
+  }
+
+  async scanPoints(cursor?: string | null, limit = 256): Promise<VectorScanPage> {
+    const items = [...this.points.values()].sort((a, b) => a.id.localeCompare(b.id));
+    let startIndex = 0;
+    if (cursor) {
+      const cursorIndex = items.findIndex((p) => p.id === cursor);
+      startIndex = cursorIndex >= 0 ? cursorIndex + 1 : 0;
+    }
+
+    const page = items.slice(startIndex, startIndex + limit);
+    return {
+      points: page.map((p) => ({
+        id: p.id,
+        memoryId: p.payload.memoryId,
+        chunkIndex: p.payload.chunkIndex,
+      })),
+      nextCursor: startIndex + limit < items.length ? (page[page.length - 1]?.id ?? null) : null,
+    };
   }
 
   async search(params: VectorSearchParams): Promise<VectorSearchResult[]> {

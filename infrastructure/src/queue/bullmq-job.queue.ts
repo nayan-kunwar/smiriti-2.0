@@ -29,6 +29,19 @@ export class BullMqJobQueue implements JobQueue {
   }
 
   async enqueue(name: string, data: unknown, opts?: EnqueueOptions): Promise<void> {
+    if (opts?.jobId && opts.force) {
+      const existing = await this.queue.getJob(opts.jobId);
+      if (existing) {
+        const state = await existing.getState();
+        if (state === 'failed' || state === 'completed') {
+          try {
+            await existing.remove();
+          } catch {
+            // If the job is locked by a worker, leave it for the next run.
+          }
+        }
+      }
+    }
     await this.queue.add(name, data as Record<string, unknown>, {
       ...(opts?.jobId ? { jobId: opts.jobId } : {}),
       attempts: 3,

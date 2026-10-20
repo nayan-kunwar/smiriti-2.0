@@ -52,4 +52,4 @@ Both v1 types use the same `memories` table with a `type` enum field. Retrieval,
 
 - Prisma `MemoryType` enum: `long_term | semantic` only in v1 migrations.
 - API Zod schemas validate `type` against the same enum.
-- LangGraph extraction node assigns type during `memoryExtraction`.
+- The chat graph's `classify` node assigns type during memory extraction.

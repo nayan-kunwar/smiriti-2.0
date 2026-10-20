@@ -1,0 +1,24 @@
+{
+  "id": "chat-dedup-nyc",
+  "suite": "chat",
+  "kind": "chat",
+  "seed": 13,
+  "input": {
+    "messages": [{ "role": "user", "content": "Remember that I live in NYC." }]
+  },
+  "fixtures": {
+    "memories": [{ "content": "I live in NYC", "type": "long_term" }]
+  },
+  "chatScript": [
+    "{\"intent\":\"remember\",\"memories\":[{\"content\":\"I live in NYC\",\"type\":\"long_term\",\"confidence\":0.9}]}",
+    "I already knew that you live in NYC."
+  ],
+  "expect": {
+    "status": "completed",
+    "memoryCount": 1,
+    "memoriesCreated": 0,
+    "responseIncludes": ["already", "NYC"],
+    "conversationMessages": 2,
+    "duplicateCount": 1
+  }
+}
