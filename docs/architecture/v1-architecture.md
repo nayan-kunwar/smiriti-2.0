@@ -1,8 +1,8 @@
 # Smriti v1 Architecture
 
-> **Status**: v1 implemented (memory CRUD, semantic search, async indexing, reconciliation, REST/chat dedup, and LangGraph `/v1/chat`).
+> **Status**: v1 implemented (memory CRUD, semantic search, async indexing, reconciliation, REST/chat dedup, request idempotency, and LangGraph `/v1/chat`).
 > **Scope**: Long-term + semantic memory, REST APIs, LangGraph `/chat`, embedding pipeline, auth, observability
-> **Not in v1**: `/metrics`, request-level idempotency, object storage, DLQ, auth/API-key audit events, per-user rate-limit tracking, streaming chat/checkpointing.
+> **Not in v1**: `/metrics`, object storage, DLQ, auth/API-key audit events, per-user rate-limit tracking, streaming chat/checkpointing.
 > **Last updated**: 2026-10-20
 
 ---
@@ -11,7 +11,7 @@
 
 ### 1.1 Purpose
 
-Smriti is a production-grade agentic memory assistant. v1 delivers a REST API and a LangGraph-powered `/chat` endpoint that can extract, store, retrieve, and reason over user memories with semantic search backed by vector embeddings.
+Smriti is a production-grade agentic memory assistant. v1 delivers a REST API and a LangGraph-powered `/chat` endpoint that can extract, store, retrieve, and reason over user memories with semantic search backed by vector embeddings. Memory and chat writes support optional request idempotency.
 
 ### 1.2 Actors
 
@@ -69,7 +69,7 @@ Embedding vectors are **provider-scoped**. A collection is never shared across p
 
 ### 2.1 Create
 
-1. Client sends `POST /v1/memories` with a bearer token or API key.
+1. Client sends `POST /v1/memories` with a bearer token or API key. An optional `Idempotency-Key` header is handled by the API interceptor before the use case runs.
 2. API validates input (Zod).
 3. Unless `?force=true`, a best-effort semantic duplicate check runs first (`DEDUP_TIMEOUT_MS`). A match at or above `DEDUP_SIMILARITY_THRESHOLD` returns `409 Conflict` with `{ existingMemoryId, similarity }` and writes nothing.
 4. Application `createMemory` runs domain invariants.
@@ -81,7 +81,7 @@ Embedding vectors are **provider-scoped**. A collection is never shared across p
 
 The dedup check is intentionally not part of the durable write path: if embeddings or Qdrant are unavailable, creation proceeds and indexing retries normally.
 
-**Known limitation:** the memory, audit, and index-state writes are separate Prisma statements (no surrounding transaction). A crash after the memory insert can leave the memory without an audit entry; the reconciler repairs missing/stale index state. Request-level `Idempotency-Key` handling is deferred; job IDs provide indexing idempotency.
+**Known limitation:** the memory, audit, and index-state writes are separate Prisma statements (no surrounding transaction). A crash after the memory insert can leave the memory without an audit entry; the reconciler repairs missing/stale index state. `Idempotency-Key` covers retried successful requests on memory create and chat, but cannot make those multi-step writes atomic; job IDs still provide indexing idempotency.
 
 ### 2.2 Update
 
@@ -115,16 +115,17 @@ The reconciler scans Postgres in pages, compares state/hash, verifies that each 
 
 ### 2.5 Chat Turn
 
-1. Client sends `POST /v1/chat` with `{ message, conversationId? }`.
-2. The API finds or creates an owned conversation and loads the last 20 messages as history.
-3. The user message is appended to Postgres before the graph runs.
-4. `classify` asks the chat model for `remember`, `recall`, or `general` intent and extracts candidate memories for `remember`.
-5. `remember`: `validate` trims/deduplicates extracted content, then `persist` runs best-effort dedup per memory and calls the shared `createMemory` use case. Duplicates are skipped and reported as warnings.
-6. `recall`: `retrieve` embeds the user message, searches Qdrant, hydrates the matching Postgres rows, and `buildContext` wraps them in `<retrieved_memories>` delimiters.
-7. `respond` generates the assistant reply with bounded history and context.
-8. The assistant message is appended to Postgres and the synchronous response returns the conversation ID plus created/retrieved IDs and dedup warnings.
+1. Client sends `POST /v1/chat` with `{ message, conversationId? }` and an optional `Idempotency-Key`.
+2. If a key is supplied, the API reserves or replays it before doing any conversation work.
+3. The API finds or creates an owned conversation and loads the last 20 messages as history.
+4. The user message is appended to Postgres before the graph runs.
+5. `classify` asks the chat model for `remember`, `recall`, or `general` intent and extracts candidate memories for `remember`.
+6. `remember`: `validate` trims/deduplicates extracted content, then `persist` runs best-effort dedup per memory and calls the shared `createMemory` use case. Duplicates are skipped and reported as warnings.
+7. `recall`: `retrieve` embeds the user message, searches Qdrant, hydrates the matching Postgres rows, and `buildContext` wraps them in `<retrieved_memories>` delimiters.
+8. `respond` generates the assistant reply with bounded history and context.
+9. The assistant message is appended to Postgres and the synchronous response returns the conversation ID plus created/retrieved IDs and dedup warnings. The response is stored against the idempotency key when one was supplied.
 
-Chat turns do not use request-level idempotency keys in v1. If the request fails after the user message is persisted, the conversation retains that message and the client may retry as a new turn.
+Chat idempotency replays successful turns, so a retry does not create a second user/assistant pair or repeat memory persistence. There is still no transaction across user message, graph, and assistant message: a crash after partial persistence can leave partial history, and a retry after that failure creates a new turn.
 
 ---
 
@@ -311,7 +312,13 @@ erDiagram
     string key PK
     uuid user_id FK
     string request_hash
+    enum status
+    int response_status
     jsonb response_snapshot
+    string lock_token
+    timestamp locked_until
+    timestamp created_at
+    timestamp updated_at
     timestamp expires_at
   }
 ```
@@ -329,14 +336,15 @@ erDiagram
 - `conversation_messages (conversation_id, created_at)`
 - `audit_logs (user_id, created_at DESC)`
 - `idempotency_keys (user_id)`
+- `idempotency_keys (expires_at)`
 
-The partial indexes for pinned/archived listings were designed but are **not yet in a migration**. The `idempotency_keys` table is reserved and currently unused.
+The partial indexes for pinned/archived listings were designed but are **not yet in a migration**.
 
 ---
 
 ## 5. API Contract
 
-All endpoints are prefixed with `/v1`. `Idempotency-Key` request handling (including chat) is deferred; the `idempotency_keys` schema is reserved for that work. `/metrics` remains unimplemented.
+All endpoints are prefixed with `/v1`. `Idempotency-Key` is supported on `POST /v1/memories` and `POST /v1/chat`. `/metrics` remains unimplemented.
 
 ### 5.1 Auth
 
@@ -375,6 +383,8 @@ All endpoints are prefixed with `/v1`. `Idempotency-Key` request handling (inclu
 ```
 
 `POST /v1/memories` returns `409 Conflict` with `{ existingMemoryId, similarity }` when the dedup check finds a match. Add `?force=true` to bypass the check.
+
+Both `POST /v1/memories` and `POST /v1/chat` accept an optional `Idempotency-Key` header (1–255 characters). The key is scoped to the authenticated user and route. A replay returns the original status and body with `Idempotency-Replayed: true`. Reusing a key with a different payload returns `409` with `reason: "IDEMPOTENCY_KEY_REUSE"`; a concurrent request returns `409` with `reason: "IDEMPOTENCY_IN_PROGRESS"`. Successful responses are cached for `IDEMPOTENCY_TTL_HOURS`; failed requests release the key. See [ADR-010](../adr/ADR-010-request-idempotency.md).
 
 #### Memory Response
 
@@ -465,7 +475,7 @@ Search hits currently report `indexingStatus: "indexed"` because they come from 
 }
 ```
 
-`POST /v1/conversations` accepts `{ title?: string }`. `GET /v1/conversations/:id/messages` accepts `limit` (default 50, max 200) and returns messages in ascending age order. Both chat and message endpoints verify conversation ownership.
+`POST /v1/conversations` accepts `{ title?: string }`. `GET /v1/conversations/:id/messages` accepts `limit` (default 50, max 200) and returns messages in ascending age order. Both chat and message endpoints verify conversation ownership. Chat accepts `Idempotency-Key` with the same replay/conflict semantics as memory creation.
 
 ### 5.4 Admin
 
@@ -495,6 +505,8 @@ Search hits currently report `indexingStatus: "indexed"` because they come from 
   correlationId: string;
   existingMemoryId?: string; // 409 dedup conflict
   similarity?: number;       // 409 dedup conflict
+  reason?: string;           // 409 idempotency conflict
+  retryAfterSeconds?: number; // 409 in-progress conflict
   details?: unknown;         // validation errors
 }
 ```
@@ -569,7 +581,7 @@ LangGraph nodes call **application services only** (`createMemory`, `searchMemor
 - The classification/extraction call and response call are separate; only two model calls per turn in the normal path.
 - `remember` runs the same shared `createMemory` use case as REST, so audit entries, index state, and BullMQ jobs stay consistent.
 - Chat dedup timeout/failure skips the check rather than blocking the write. REST dedup timeout/failure behaves the same way.
-- A failed graph after the user message is persisted does not roll back that message; v1 has no request idempotency or turn transactional boundary.
+- A failed graph after the user message is persisted does not roll back that message. Idempotency only replays successful turns; the turn's multi-step writes are not transactional.
 
 ---
 
@@ -589,6 +601,7 @@ All ports live in `packages/domain/src/ports/`. Adapters live in `infrastructure
 | `RefreshTokenRepository` | `save`, `findByTokenHash`, `revoke`                                                                              | Prisma, in-memory                       |
 | `ApiKeyRepository`       | `save`, `findByKeyHash`, `findById`, `findByUser`, `delete`, `updateLastUsed`                                    | Prisma, in-memory                       |
 | `ConversationRepository` | `createConversation`, `findConversation`, `appendMessage`, `listMessages`                                        | Prisma, in-memory                       |
+| `IdempotencyStore`       | `begin`, `complete`, `abort`, `deleteExpired`                                                                    | Prisma, in-memory                       |
 | `PasswordHasher`         | `hash`, `verify`                                                                                                 | bcrypt                                  |
 | `EmbeddingProvider`      | `embed(texts[])`, `model`, `dimension`, `maxInputTokens`                                                         | OpenAI-compatible (DMR, Ollama, OpenAI) |
 | `ChatModel`              | `complete(messages[], options?)`, `model`                                                                        | OpenAI-compatible (DMR, Ollama, OpenAI) |
@@ -597,11 +610,10 @@ All ports live in `packages/domain/src/ports/`. Adapters live in `infrastructure
 
 ### 7.2 Planned
 
-| Port               | Purpose                                  | Target   |
-| ------------------ | ---------------------------------------- | -------- |
-| `IdempotencyStore` | Request-level `Idempotency-Key` handling | Deferred |
-| `ObjectStore`      | Conversation exports / eval artifacts    | Deferred |
-| `CacheStore`       | Shared cache/session storage             | Deferred |
+| Port          | Purpose                               | Target   |
+| ------------- | ------------------------------------- | -------- |
+| `ObjectStore` | Conversation exports / eval artifacts | Deferred |
+| `CacheStore`  | Shared cache/session storage          | Deferred |
 
 ### 7.3 Port Interfaces (canonical)
 
@@ -658,9 +670,23 @@ interface ConversationRepository {
   ): Promise<ConversationMessageRecord>;
   listMessages(conversationId: string, limit?: number): Promise<ConversationMessageRecord[]>;
 }
+
+// packages/domain/src/ports/idempotency-store.port.ts
+interface IdempotencyStore {
+  begin(input: BeginIdempotencyInput): Promise<BeginIdempotencyResult>;
+  complete(input: {
+    key: string;
+    requestHash: string;
+    lockToken: string;
+    responseStatus: number;
+    responseSnapshot: unknown;
+  }): Promise<void>;
+  abort(key: string, requestHash: string, lockToken: string): Promise<void>;
+  deleteExpired(now: Date): Promise<number>;
+}
 ```
 
-Every port except `PasswordHasher` has an in-memory/fake adapter for unit tests; `PasswordHasher` is bcrypt-only in v1.
+Every port except `PasswordHasher` has an in-memory/fake adapter for unit tests; `PasswordHasher` is bcrypt-only in v1. The idempotency adapter has both Prisma and in-memory implementations.
 
 ---
 
@@ -668,42 +694,45 @@ Every port except `PasswordHasher` has an in-memory/fake adapter for unit tests;
 
 Validated at boot via Zod (`packages/shared/src/config.ts`). Application **fails fast** on missing required values.
 
-| Variable                     | Required  | Default                                     | Description                                                      |
-| ---------------------------- | --------- | ------------------------------------------- | ---------------------------------------------------------------- |
-| `NODE_ENV`                   | no        | `development`                               | Runtime mode                                                     |
-| `PORT`                       | no        | `3000`                                      | API listen port                                                  |
-| `LOG_LEVEL`                  | no        | `info`                                      | Pino level                                                       |
-| `DATABASE_URL`               | yes       | —                                           | Postgres connection                                              |
-| `REDIS_URL`                  | yes       | —                                           | Redis connection (BullMQ)                                        |
-| `QDRANT_URL`                 | yes       | —                                           | Qdrant HTTP endpoint                                             |
-| `QDRANT_COLLECTION`          | no        | `smriti_dev`                                | Collection; use a per-provider name such as `smriti_dev_dmr_768` |
-| `EMBEDDING_PROVIDER`         | no        | `ollama`                                    | `ollama` \| `openai` \| `dmr`                                    |
-| `OLLAMA_BASE_URL`            | if ollama | `http://localhost:11434`                    | Ollama API                                                       |
-| `OLLAMA_EMBED_MODEL`         | no        | `nomic-embed-text`                          | Ollama embedding model (768 dims)                                |
-| `OLLAMA_CHAT_MODEL`          | no        | `llama3.2`                                  | Ollama chat model                                                |
-| `DMR_BASE_URL`               | if dmr    | `http://localhost:12434/engines/v1`         | Docker Model Runner OpenAI-compatible API                        |
-| `DMR_EMBED_MODEL`            | no        | `docker.io/ai/nomic-embed-text-v1.5:latest` | DMR embedding model (768 dims)                                   |
-| `DMR_CHAT_MODEL`             | no        | `docker.io/ai/qwen2.5:3B-Q4_K_M`            | DMR chat model                                                   |
-| `LLM_PROVIDER`               | no        | `openai`                                    | Chat provider: `ollama` \| `openai` \| `dmr`                     |
-| `OPENAI_API_KEY`             | if openai | —                                           | Required when either provider is `openai`                        |
-| `OPENAI_EMBED_MODEL`         | no        | `text-embedding-3-small`                    | OpenAI embedding model (1536 dims)                               |
-| `OPENAI_CHAT_MODEL`          | no        | `gpt-4o-mini`                               | OpenAI chat model                                                |
-| `JWT_SECRET`                 | yes       | —                                           | Access-token signing secret (min 16 chars)                       |
-| `JWT_EXPIRES_IN`             | no        | `15m`                                       | Access token TTL                                                 |
-| `REFRESH_TOKEN_EXPIRES_IN`   | no        | `7d`                                        | Refresh token TTL                                                |
-| `RATE_LIMIT_TTL`             | no        | `60`                                        | Rate-limit window (seconds)                                      |
-| `RATE_LIMIT_MAX`             | no        | `100`                                       | Requests per window                                              |
-| `DEDUP_SIMILARITY_THRESHOLD` | no        | `0.92`                                      | REST/chat duplicate threshold                                    |
-| `DEDUP_TIMEOUT_MS`           | no        | `2000`                                      | Best-effort dedup/retrieval timeout                              |
-| `RECONCILE_ENABLED`          | no        | `true`                                      | Register/remove the reconcile scheduler                          |
-| `RECONCILE_INTERVAL_MINUTES` | no        | `15`                                        | Scheduler interval                                               |
-| `RECONCILE_BATCH_SIZE`       | no        | `100`                                       | Postgres page size                                               |
-| `RECONCILE_MAX_ENQUEUE`      | no        | `500`                                       | Max repairs per run                                              |
-| `S3_ENDPOINT`                | no        | —                                           | Reserved; object storage not implemented                         |
-| `S3_BUCKET`                  | no        | `smriti`                                    | Reserved                                                         |
-| `S3_ACCESS_KEY`              | no        | —                                           | Reserved                                                         |
-| `S3_SECRET_KEY`              | no        | —                                           | Reserved                                                         |
-| `CORRELATION_ID_HEADER`      | no        | `x-correlation-id`                          | Request tracing                                                  |
+| Variable                               | Required  | Default                                     | Description                                                      |
+| -------------------------------------- | --------- | ------------------------------------------- | ---------------------------------------------------------------- |
+| `NODE_ENV`                             | no        | `development`                               | Runtime mode                                                     |
+| `PORT`                                 | no        | `3000`                                      | API listen port                                                  |
+| `LOG_LEVEL`                            | no        | `info`                                      | Pino level                                                       |
+| `DATABASE_URL`                         | yes       | —                                           | Postgres connection                                              |
+| `REDIS_URL`                            | yes       | —                                           | Redis connection (BullMQ)                                        |
+| `QDRANT_URL`                           | yes       | —                                           | Qdrant HTTP endpoint                                             |
+| `QDRANT_COLLECTION`                    | no        | `smriti_dev`                                | Collection; use a per-provider name such as `smriti_dev_dmr_768` |
+| `EMBEDDING_PROVIDER`                   | no        | `ollama`                                    | `ollama` \| `openai` \| `dmr`                                    |
+| `OLLAMA_BASE_URL`                      | if ollama | `http://localhost:11434`                    | Ollama API                                                       |
+| `OLLAMA_EMBED_MODEL`                   | no        | `nomic-embed-text`                          | Ollama embedding model (768 dims)                                |
+| `OLLAMA_CHAT_MODEL`                    | no        | `llama3.2`                                  | Ollama chat model                                                |
+| `DMR_BASE_URL`                         | if dmr    | `http://localhost:12434/engines/v1`         | Docker Model Runner OpenAI-compatible API                        |
+| `DMR_EMBED_MODEL`                      | no        | `docker.io/ai/nomic-embed-text-v1.5:latest` | DMR embedding model (768 dims)                                   |
+| `DMR_CHAT_MODEL`                       | no        | `docker.io/ai/qwen2.5:3B-Q4_K_M`            | DMR chat model                                                   |
+| `LLM_PROVIDER`                         | no        | `openai`                                    | Chat provider: `ollama` \| `openai` \| `dmr`                     |
+| `OPENAI_API_KEY`                       | if openai | —                                           | Required when either provider is `openai`                        |
+| `OPENAI_EMBED_MODEL`                   | no        | `text-embedding-3-small`                    | OpenAI embedding model (1536 dims)                               |
+| `OPENAI_CHAT_MODEL`                    | no        | `gpt-4o-mini`                               | OpenAI chat model                                                |
+| `JWT_SECRET`                           | yes       | —                                           | Access-token signing secret (min 16 chars)                       |
+| `JWT_EXPIRES_IN`                       | no        | `15m`                                       | Access token TTL                                                 |
+| `REFRESH_TOKEN_EXPIRES_IN`             | no        | `7d`                                        | Refresh token TTL                                                |
+| `RATE_LIMIT_TTL`                       | no        | `60`                                        | Rate-limit window (seconds)                                      |
+| `RATE_LIMIT_MAX`                       | no        | `100`                                       | Requests per window                                              |
+| `DEDUP_SIMILARITY_THRESHOLD`           | no        | `0.92`                                      | REST/chat duplicate threshold                                    |
+| `DEDUP_TIMEOUT_MS`                     | no        | `2000`                                      | Best-effort dedup/retrieval timeout                              |
+| `IDEMPOTENCY_TTL_HOURS`                | no        | `24`                                        | Idempotency response cache TTL                                   |
+| `IDEMPOTENCY_LOCK_TIMEOUT_MS`          | no        | `30000`                                     | In-progress reservation stale lock                               |
+| `IDEMPOTENCY_CLEANUP_INTERVAL_MINUTES` | no        | `60`                                        | Expired-key cleanup scheduler interval                           |
+| `RECONCILE_ENABLED`                    | no        | `true`                                      | Register/remove the reconcile scheduler                          |
+| `RECONCILE_INTERVAL_MINUTES`           | no        | `15`                                        | Scheduler interval                                               |
+| `RECONCILE_BATCH_SIZE`                 | no        | `100`                                       | Postgres page size                                               |
+| `RECONCILE_MAX_ENQUEUE`                | no        | `500`                                       | Max repairs per run                                              |
+| `S3_ENDPOINT`                          | no        | —                                           | Reserved; object storage not implemented                         |
+| `S3_BUCKET`                            | no        | `smriti`                                    | Reserved                                                         |
+| `S3_ACCESS_KEY`                        | no        | —                                           | Reserved                                                         |
+| `S3_SECRET_KEY`                        | no        | —                                           | Reserved                                                         |
+| `CORRELATION_ID_HEADER`                | no        | `x-correlation-id`                          | Request tracing                                                  |
 
 `pnpm docker:up` provides Postgres on `5433`, Redis on `6379`, and Qdrant on `6333`. Docker Model Runner is host-native; when API/worker run inside Compose, override `DMR_BASE_URL` with `http://model-runner.docker.internal/engines/v1`.
 
@@ -737,7 +766,7 @@ Code defaults are `EMBEDDING_PROVIDER=ollama` and `LLM_PROVIDER=openai`; `.env.e
 | **API key leakage**                      | Full account access                | Keys stored hashed; shown once at creation; rotation via delete + reissue                                                                |
 | **Rate abuse / DoS**                     | Service degradation                | Redis-backed rate limiting per client IP (Nest throttler default, in-memory fallback); per-user tracking deferred                        |
 | **SQL injection**                        | Data breach                        | Prisma parameterized queries; no raw SQL without review                                                                                  |
-| **Duplicate indexing on retry**          | Wasted work / duplicate points     | Deterministic BullMQ job IDs + `memory_index_states` hash guards; request-level idempotency deferred                                     |
+| **Duplicate writes on retry**            | Duplicate memories or chat turns   | Optional `Idempotency-Key` replay on memory create and chat; deterministic BullMQ job IDs + `memory_index_states` hash guards            |
 | **Stale vector leakage after delete**    | Deleted memory still searchable    | Delete job + scheduled reconciler with Postgres existence check; document brief consistency window                                       |
 | **Secrets in repo**                      | Credential exposure                | `.env` gitignored; platform secret store in prod                                                                                         |
 | **Insufficient audit trail**             | Compliance failure                 | Memory create/update/delete are logged with correlation ID, action, entity, and content hash; auth/API-key mutations are not yet audited |
@@ -777,13 +806,14 @@ smriti-2.0/
 
 ## 11. Background Jobs
 
-| Job                 | Trigger                           | Idempotency key                         | Retries                    |
-| ------------------- | --------------------------------- | --------------------------------------- | -------------------------- |
-| `embed-and-index`   | memory create/update              | `jobId = {memoryId}_{contentHash}`      | 3 with exponential backoff |
-| `delete-vectors`    | memory delete                     | `jobId = memoryId`                      | 3 with exponential backoff |
-| `reconcile-vectors` | BullMQ scheduler (default 15 min) | BullMQ scheduler ID `reconcile-vectors` | 1                          |
+| Job                        | Trigger                           | Idempotency key                                | Retries                    |
+| -------------------------- | --------------------------------- | ---------------------------------------------- | -------------------------- |
+| `embed-and-index`          | memory create/update              | `jobId = {memoryId}_{contentHash}`             | 3 with exponential backoff |
+| `delete-vectors`           | memory delete                     | `jobId = memoryId`                             | 3 with exponential backoff |
+| `reconcile-vectors`        | BullMQ scheduler (default 15 min) | BullMQ scheduler ID `reconcile-vectors`        | 1                          |
+| `cleanup-idempotency-keys` | BullMQ scheduler (default 60 min) | BullMQ scheduler ID `cleanup-idempotency-keys` | 1                          |
 
-The reconciler runs in the worker. It can force re-enqueue a memory whose job ID is terminal (`completed` or `failed`); active/waiting/delayed jobs are left untouched. `embed-and-index`/`delete-vectors` failed jobs are retained in Redis (`removeOnFail: 500`) and logged with structured fields; the scheduler-created reconcile job uses BullMQ defaults. There is no DLQ implementation in v1.
+The reconciler runs in the worker. It can force re-enqueue a memory whose job ID is terminal (`completed` or `failed`); active/waiting/delayed jobs are left untouched. `embed-and-index`/`delete-vectors` failed jobs are retained in Redis (`removeOnFail: 500`) and logged with structured fields; the scheduler-created reconcile job uses BullMQ defaults. The cleanup scheduler deletes expired idempotency rows and logs the deleted count. There is no DLQ implementation in v1.
 
 ---
 
@@ -798,6 +828,7 @@ The reconciler runs in the worker. It can force re-enqueue a memory whose job ID
 | Jobs         | Vitest + fake ports      | Embed/index, stale-chunk pruning, reconcile handlers; no worker-process test |
 | Agent loop   | `pnpm eval` gate         | Harness policy, tools, injection, retry/resume                               |
 | Chat suite   | `pnpm eval` gate         | Remember, recall, dedup, general chat, conversation writes                   |
+| Idempotency  | Vitest + fake/Postgres   | Replay, payload mismatch, in-progress conflict, abort, expiry                |
 | Live models  | `pnpm eval:live` (DMR)   | Local exploration only; never gates CI                                       |
 
 `pnpm test` runs unit/application tests and the API e2e suite when Postgres is reachable. The memory/chat API specs replace embeddings, the job queue, and Qdrant with fakes; the chat spec also supplies a fake `ChatModel`. When Postgres is unavailable the suite is skipped. CI runs format check, lint, typecheck, migrations, tests, the deterministic eval gate, and Docker image builds, with Postgres and Redis service containers (no Qdrant).
@@ -815,3 +846,5 @@ The reconciler runs in the worker. It can force re-enqueue a memory whose job ID
 - [ADR-007: Docker Model Runner as local default](../adr/ADR-007-docker-model-runner.md)
 - [ADR-008: Agent harness and eval gate](../adr/ADR-008-agent-harness-eval-gate.md)
 - [ADR-009: LangGraph chat orchestration](../adr/ADR-009-langgraph-chat-orchestration.md)
+- [ADR-010: Request idempotency](../adr/ADR-010-request-idempotency.md)
+- [OpenAPI contract](../api/openapi.json)

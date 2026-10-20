@@ -1,4 +1,5 @@
 import { Module } from '@nestjs/common';
+import { IdempotencyModule } from '../common/idempotency/idempotency.module.js';
 import { MemoryController } from './memory.controller.js';
 import { MemoryService } from './memory.service.js';
 import { APP_CONFIG } from '../config/config.module.js';
@@ -8,6 +9,7 @@ import type { AppConfig } from '@smriti/shared';
 import type { EmbeddingProvider } from '@smriti/domain';
 
 @Module({
+  imports: [IdempotencyModule],
   controllers: [MemoryController],
   providers: [
     MemoryService,

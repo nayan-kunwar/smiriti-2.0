@@ -30,6 +30,9 @@ export const ConfigSchema = z
     RATE_LIMIT_MAX: z.coerce.number().int().positive().default(100),
     DEDUP_SIMILARITY_THRESHOLD: z.coerce.number().min(0).max(1).default(0.92),
     DEDUP_TIMEOUT_MS: z.coerce.number().int().positive().max(30_000).default(2_000),
+    IDEMPOTENCY_TTL_HOURS: z.coerce.number().int().positive().max(720).default(24),
+    IDEMPOTENCY_LOCK_TIMEOUT_MS: z.coerce.number().int().positive().max(300_000).default(30_000),
+    IDEMPOTENCY_CLEANUP_INTERVAL_MINUTES: z.coerce.number().int().positive().max(1_440).default(60),
     RECONCILE_ENABLED: z
       .enum(['true', 'false'])
       .default('true')

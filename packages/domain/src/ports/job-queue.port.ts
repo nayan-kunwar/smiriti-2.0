@@ -1,6 +1,7 @@
 export const EMBED_AND_INDEX_JOB = 'embed-and-index';
 export const DELETE_VECTORS_JOB = 'delete-vectors';
 export const RECONCILE_VECTORS_JOB = 'reconcile-vectors';
+export const CLEANUP_IDEMPOTENCY_KEYS_JOB = 'cleanup-idempotency-keys';
 
 export interface EmbedAndIndexPayload {
   memoryId: string;

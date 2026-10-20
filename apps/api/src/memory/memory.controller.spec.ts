@@ -102,6 +102,59 @@ describe.skipIf(!dbAvailable)('Memory API (e2e)', () => {
     expect(auditLogs.length).toBeGreaterThanOrEqual(1);
   });
 
+  it('replays an identical idempotent create and rejects key reuse', async () => {
+    const key = `memory-idempotency-${Date.now()}`;
+    const content = `Idempotent memory ${Date.now()}`;
+    const payload = { type: 'long_term', content };
+
+    const first = await request(app.getHttpServer())
+      .post('/v1/memories')
+      .set('Authorization', `Bearer ${accessToken}`)
+      .set('Idempotency-Key', key)
+      .send(payload)
+      .expect(201);
+
+    const second = await request(app.getHttpServer())
+      .post('/v1/memories')
+      .set('Authorization', `Bearer ${accessToken}`)
+      .set('Idempotency-Key', key)
+      .send(payload)
+      .expect(201);
+
+    expect(second.headers['idempotency-replayed']).toBe('true');
+    expect(second.body.id).toBe(first.body.id);
+    expect(await prisma.memory.count({ where: { userId, content } })).toBe(1);
+
+    const conflict = await request(app.getHttpServer())
+      .post('/v1/memories')
+      .set('Authorization', `Bearer ${accessToken}`)
+      .set('Idempotency-Key', key)
+      .send({ ...payload, content: `${content} changed` })
+      .expect(409);
+
+    expect(conflict.body.reason).toBe('IDEMPOTENCY_KEY_REUSE');
+  });
+
+  it('releases an idempotency reservation after a handler failure', async () => {
+    const key = `memory-idempotency-error-${Date.now()}`;
+
+    await request(app.getHttpServer())
+      .post('/v1/memories')
+      .set('Authorization', `Bearer ${accessToken}`)
+      .set('Idempotency-Key', key)
+      .send({ type: 'long_term', content: '' })
+      .expect(400);
+
+    const retry = await request(app.getHttpServer())
+      .post('/v1/memories')
+      .set('Authorization', `Bearer ${accessToken}`)
+      .set('Idempotency-Key', key)
+      .send({ type: 'long_term', content: `Recovered memory ${Date.now()}` })
+      .expect(201);
+
+    expect(retry.body.id).toBeDefined();
+  });
+
   it('supports API key authentication', async () => {
     const response = await request(app.getHttpServer())
       .get('/v1/memories')

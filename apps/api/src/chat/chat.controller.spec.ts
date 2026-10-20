@@ -32,13 +32,18 @@ describe.skipIf(!dbAvailable)('Chat API (e2e)', () => {
   let prisma: PrismaClient;
   let userId: string;
   let accessToken: string;
+  let model: FakeChatModel;
 
   beforeAll(async () => {
     const { AppModule } = await import('../app.module.js');
     const { PRISMA_CLIENT } = await import('../prisma/prisma.module.js');
-    const model = new FakeChatModel([
+    model = new FakeChatModel([
       '{"intent":"remember","memories":[{"content":"I live in Lisbon","type":"long_term","confidence":0.95}]}',
       'Noted — you live in Lisbon.',
+      '{"intent":"remember","memories":[{"content":"I live in Porto","type":"long_term","confidence":0.95}]}',
+      'Noted — you live in Porto.',
+      '{"intent":"general","memories":[]}',
+      'Hello! How can I help?',
     ]);
 
     const moduleRef = await Test.createTestingModule({ imports: [AppModule] })
@@ -98,6 +103,54 @@ describe.skipIf(!dbAvailable)('Chat API (e2e)', () => {
       where: { userId, content: 'I live in Lisbon' },
     });
     expect(memory).not.toBeNull();
+  });
+
+  it('replays an identical idempotent chat turn without writing duplicate messages', async () => {
+    const key = `chat-idempotency-${Date.now()}`;
+    const payload = { message: 'Remember that I live in Porto' };
+
+    const first = await request(app.getHttpServer())
+      .post('/v1/chat')
+      .set('Authorization', `Bearer ${accessToken}`)
+      .set('Idempotency-Key', key)
+      .send(payload)
+      .expect(200);
+
+    const second = await request(app.getHttpServer())
+      .post('/v1/chat')
+      .set('Authorization', `Bearer ${accessToken}`)
+      .set('Idempotency-Key', key)
+      .send(payload)
+      .expect(200);
+
+    expect(second.headers['idempotency-replayed']).toBe('true');
+    expect(second.body.conversationId).toBe(first.body.conversationId);
+    expect(model.calls).toHaveLength(4);
+    expect(
+      await prisma.conversationMessage.count({
+        where: { conversationId: first.body.conversationId },
+      }),
+    ).toBe(2);
+    expect(await prisma.memory.count({ where: { userId, content: 'I live in Porto' } })).toBe(1);
+  });
+
+  it('rejects an idempotency key reused with a different chat request', async () => {
+    const key = `chat-idempotency-conflict-${Date.now()}`;
+    await request(app.getHttpServer())
+      .post('/v1/chat')
+      .set('Authorization', `Bearer ${accessToken}`)
+      .set('Idempotency-Key', key)
+      .send({ message: 'Hello there' })
+      .expect(200);
+
+    const conflict = await request(app.getHttpServer())
+      .post('/v1/chat')
+      .set('Authorization', `Bearer ${accessToken}`)
+      .set('Idempotency-Key', key)
+      .send({ message: 'Hello again' })
+      .expect(409);
+
+    expect(conflict.body.reason).toBe('IDEMPOTENCY_KEY_REUSE');
   });
 
   it('rejects chat without authentication', async () => {

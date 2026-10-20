@@ -2,6 +2,7 @@ import pino from 'pino';
 import { Queue, Worker } from 'bullmq';
 import { loadConfig } from '@smriti/shared';
 import {
+  CLEANUP_IDEMPOTENCY_KEYS_JOB,
   DELETE_VECTORS_JOB,
   EMBED_AND_INDEX_JOB,
   RECONCILE_VECTORS_JOB,
@@ -13,6 +14,7 @@ import {
   createEmbeddingProvider,
   disconnectPrisma,
   getPrismaClient,
+  PrismaIdempotencyStore,
   PrismaMemoryEmbeddingStore,
   PrismaMemoryIndexStateStore,
   PrismaMemoryRepository,
@@ -49,6 +51,7 @@ async function main(): Promise<void> {
   const memoryRepository = new PrismaMemoryRepository(prisma);
   const embeddingStore = new PrismaMemoryEmbeddingStore(prisma);
   const indexStateStore = new PrismaMemoryIndexStateStore(prisma);
+  const idempotencyStore = new PrismaIdempotencyStore(prisma);
   const jobQueue = new BullMqJobQueue(config.REDIS_URL);
   const schedulerQueue = new Queue(SMRITI_QUEUE_NAME, { connection });
 
@@ -95,6 +98,11 @@ async function main(): Promise<void> {
         await handleDeleteVectors({ vectorStore, embeddingStore }, payload);
         return;
       }
+      if (job.name === CLEANUP_IDEMPOTENCY_KEYS_JOB) {
+        const deleted = await idempotencyStore.deleteExpired(new Date());
+        logger.info({ jobId: job.id, deleted }, 'cleanup-idempotency-keys complete');
+        return;
+      }
       if (job.name === RECONCILE_VECTORS_JOB) {
         const summary = await reconcileVectors({
           memoryRepository,
@@ -135,6 +143,16 @@ async function main(): Promise<void> {
   } else {
     await schedulerQueue.removeJobScheduler(RECONCILE_SCHEDULER_ID);
   }
+
+  await schedulerQueue.upsertJobScheduler(
+    'cleanup-idempotency-keys',
+    { every: config.IDEMPOTENCY_CLEANUP_INTERVAL_MINUTES * 60_000 },
+    { name: CLEANUP_IDEMPOTENCY_KEYS_JOB, data: {} },
+  );
+  logger.info(
+    { intervalMinutes: config.IDEMPOTENCY_CLEANUP_INTERVAL_MINUTES },
+    'Idempotency cleanup scheduler registered',
+  );
 
   logger.info('Worker started, waiting for jobs...');
 

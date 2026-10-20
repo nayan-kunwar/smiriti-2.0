@@ -18,6 +18,7 @@ export async function disconnectPrisma(): Promise<void> {
 
 export * from './persistence/prisma-memory.repository.js';
 export * from './persistence/prisma-conversation.repository.js';
+export * from './persistence/prisma-idempotency.store.js';
 export * from './persistence/prisma-memory-embedding.store.js';
 export * from './persistence/prisma-memory-index-state.store.js';
 export * from './persistence/prisma-audit-log.repository.js';
@@ -38,3 +39,4 @@ export * from './testing/fake-job-queue.js';
 export * from './testing/fake-embedding-store.js';
 export * from './testing/fake-index-state-store.js';
 export * from './testing/fake-chat-model.js';
+export * from './testing/in-memory-idempotency.store.js';

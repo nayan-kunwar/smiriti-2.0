@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
 import { createChatModel } from '@smriti/infrastructure';
+import { IdempotencyModule } from '../common/idempotency/idempotency.module.js';
 import type { ChatModel } from '@smriti/domain';
 import type { AppConfig } from '@smriti/shared';
 import { APP_CONFIG } from '../config/config.module.js';
@@ -9,7 +10,7 @@ import { ChatService } from './chat.service.js';
 import { CHAT_MODEL } from './chat.tokens.js';
 
 @Module({
-  imports: [MemoryModule],
+  imports: [MemoryModule, IdempotencyModule],
   controllers: [ChatController],
   providers: [
     ChatService,

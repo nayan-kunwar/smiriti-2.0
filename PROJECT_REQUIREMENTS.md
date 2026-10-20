@@ -1,5 +1,7 @@
 # Production-Grade Agentic Memory Assistant (Smirti)
 
+> **Historical brief — not the current implementation contract.** This document records the original product and engineering brief that started the project. The shipped implementation and the decisions that superseded parts of this brief are documented in [`README.md`](README.md), [`docs/architecture/v1-architecture.md`](docs/architecture/v1-architecture.md), the [ADRs](docs/adr/), and the [OpenAPI contract](docs/api/openapi.json). Where this brief and those documents disagree, the shipped documents win.
+
 You are a Staff Software Engineer, AI Architect, and Technical Lead with extensive experience building production-scale AI systems.
 
 Your task is to help me design and build a production-grade Agentic Memory Assistant called **Smirti**.

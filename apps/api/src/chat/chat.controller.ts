@@ -8,6 +8,7 @@ import {
   Param,
   Post,
   Query,
+  UseInterceptors,
 } from '@nestjs/common';
 import {
   ChatRequestSchema,
@@ -19,6 +20,7 @@ import {
 } from '@smriti/shared';
 import { ZodValidationPipe } from '../common/pipes/zod-validation.pipe.js';
 import { CurrentUserId, CorrelationId } from '../common/decorators/request-context.decorator.js';
+import { IdempotencyInterceptor } from '../common/idempotency/idempotency.interceptor.js';
 import { ChatService } from './chat.service.js';
 
 @Controller('v1')
@@ -27,6 +29,7 @@ export class ChatController {
 
   @Post('chat')
   @HttpCode(HttpStatus.OK)
+  @UseInterceptors(IdempotencyInterceptor)
   async chat(
     @CurrentUserId() userId: string,
     @CorrelationId() correlationId: string,

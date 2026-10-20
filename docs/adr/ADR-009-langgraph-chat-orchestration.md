@@ -48,9 +48,11 @@ Routing:
 
 `ConversationRepository` is a domain port with Prisma and in-memory adapters. `POST /v1/chat` loads at most 20 history messages, persists the user message before running the graph, and persists the assistant message after. Conversation reads are user-scoped.
 
-### Synchronous and non-idempotent in v1
+### Synchronous with request idempotency
 
-`POST /v1/chat` is synchronous: it returns the assistant message and side-effect IDs in the same response. Request-level idempotency keys are deferred. A retry after a partial failure creates a new turn; the previously persisted user message remains.
+`POST /v1/chat` is synchronous: it returns the assistant message and side-effect IDs in the same response. An optional `Idempotency-Key` is handled by the API interceptor around the whole turn, so a retry of a successful request replays the stored response instead of writing another user/assistant pair. The graph itself remains unaware of idempotency.
+
+The turn is still not transactional across the user message, graph side effects, and assistant message. If the request fails after the user message is persisted, that message remains and a retry creates a new turn.
 
 ### Duplicate detection
 
@@ -69,13 +71,13 @@ The `persist` node reuses the same semantic dedup rule as REST (`DEDUP_SIMILARIT
 
 - LangGraph adds runtime weight to the application package and to API test startup.
 - The graph makes two sequential model calls per turn; latency includes classification and generation.
-- No stream, checkpointing, tool loop, or idempotency in v1.
+- No stream, checkpointing, or tool loop in v1.
 - A malformed classification gets a heuristic fallback, which may miss nuanced memory extraction.
 
 ### Deferred
 
 - Streaming responses.
-- Chat idempotency keys and turn-level transactions.
+- Turn-level transactions across user message, graph side effects, and assistant message.
 - LangGraph checkpoints/resume.
 - Conversation title generation, listing, and deletion endpoints.
 - Automatic duplicate merging.

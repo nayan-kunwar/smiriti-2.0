@@ -19,6 +19,8 @@
     "eval:live": "pnpm build:eval && node packages/eval/dist/cli.js live",
     "eval:replay": "pnpm build:eval && node packages/eval/dist/cli.js replay",
     "eval:diff": "pnpm build:eval && node packages/eval/dist/cli.js diff",
+    "openapi:generate": "pnpm --filter @smriti/shared build && tsx scripts/generate-openapi.ts",
+    "openapi:check": "pnpm --filter @smriti/shared build && tsx scripts/generate-openapi.ts --check",
     "db:generate": "prisma generate --schema=prisma/schema.prisma",
     "db:migrate": "prisma migrate dev --schema=prisma/schema.prisma",
     "db:push": "prisma db push --schema=prisma/schema.prisma",
@@ -33,7 +35,9 @@
   },
   "packageManager": "pnpm@9.15.0",
   "devDependencies": {
+    "@asteasolutions/zod-to-openapi": "^7.3.4",
     "@prisma/client": "^6.1.0",
+    "@smriti/shared": "workspace:^",
     "@types/node": "^22.10.0",
     "@typescript-eslint/eslint-plugin": "^8.18.0",
     "@typescript-eslint/parser": "^8.18.0",
@@ -41,7 +45,9 @@
     "eslint-config-prettier": "^9.1.0",
     "prettier": "^3.4.2",
     "prisma": "^6.1.0",
+    "tsx": "^4.19.2",
     "typescript": "^5.7.2",
-    "vitest": "^2.1.8"
+    "vitest": "^2.1.8",
+    "zod": "^3.24.1"
   }
 }

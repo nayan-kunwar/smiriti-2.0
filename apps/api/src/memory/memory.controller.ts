@@ -10,6 +10,7 @@ import {
   Patch,
   Post,
   Query,
+  UseInterceptors,
 } from '@nestjs/common';
 import {
   CreateMemorySchema,
@@ -23,6 +24,7 @@ import {
 } from '@smriti/shared';
 import { ZodValidationPipe } from '../common/pipes/zod-validation.pipe.js';
 import { CurrentUserId, CorrelationId } from '../common/decorators/request-context.decorator.js';
+import { IdempotencyInterceptor } from '../common/idempotency/idempotency.interceptor.js';
 import { MemoryService } from './memory.service.js';
 
 @Controller('v1/memories')
@@ -31,6 +33,7 @@ export class MemoryController {
 
   @Post()
   @HttpCode(HttpStatus.CREATED)
+  @UseInterceptors(IdempotencyInterceptor)
   async create(
     @CurrentUserId() userId: string,
     @CorrelationId() correlationId: string,

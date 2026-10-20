@@ -2,7 +2,7 @@
 
 Agentic memory assistant with a hexagonal memory pipeline: Postgres as the source of truth, asynchronous Qdrant indexing, BullMQ workers, and configurable embedding/chat providers.
 
-**Status:** v1 is implemented: memory CRUD, auth, semantic search, async indexing, reconciliation, REST/chat dedup, and the synchronous LangGraph `/v1/chat` slice.
+**Status:** v1 is implemented: memory CRUD, auth, semantic search, async indexing, reconciliation, REST/chat dedup, request idempotency for memory/chat writes, and the synchronous LangGraph `/v1/chat` slice.
 
 ## What works
 
@@ -14,6 +14,7 @@ Agentic memory assistant with a hexagonal memory pipeline: Postgres as the sourc
 - Stale-chunk pruning and scheduled reconciliation for missed jobs, stale indexes, and orphan vectors.
 - LangGraph chat that classifies intent, extracts and stores memories, retrieves context, and persists both sides of a conversation.
 - Detect-only dedup for REST creates (`409`) and chat turns (skip persist + warning), with `?force=true` override.
+- Optional `Idempotency-Key` replay for `POST /v1/memories` and `POST /v1/chat`.
 - Deterministic agent-loop and chat eval gate plus a local-only live model runner.
 
 ## Prerequisites
@@ -50,7 +51,7 @@ Then run the API and worker in separate terminals:
 
 ```bash
 pnpm dev          # API on http://localhost:3000
-pnpm dev:worker   # BullMQ worker + reconcile scheduler
+pnpm dev:worker   # BullMQ worker + reconcile/idempotency schedulers
 ```
 
 Docker Compose loads `.env` automatically for the `full` profile:
@@ -137,7 +138,33 @@ curl -H "Authorization: Bearer $TOKEN" \
   http://localhost:3000/v1/conversations/<conversation-id>/messages
 ```
 
-Chat skips persisting an extracted memory when a similar memory already exists and returns `duplicateWarnings` instead. Chat idempotency keys are deferred in v1.
+Chat skips persisting an extracted memory when a similar memory already exists and returns `duplicateWarnings` instead.
+
+## Idempotent writes
+
+Send an optional `Idempotency-Key` header on memory creation or a chat turn. Repeating the same key with the same payload returns the original response instead of writing again:
+
+```bash
+curl -X POST http://localhost:3000/v1/chat \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Idempotency-Key: chat-turn-123" \
+  -d '{"message":"Remember that I live in Lisbon"}'
+```
+
+- Same key + same request: original status/body, plus `Idempotency-Replayed: true`.
+- Same key + different payload: `409` with `reason: "IDEMPOTENCY_KEY_REUSE"`.
+- Same key while the first request is still running: `409` with `reason: "IDEMPOTENCY_IN_PROGRESS"`.
+- Only successful responses are stored; failed requests release the key.
+- Keys expire after `IDEMPOTENCY_TTL_HOURS` (default 24 hours); the worker deletes expired rows every `IDEMPOTENCY_CLEANUP_INTERVAL_MINUTES` (default 60).
+- The in-progress reservation uses `IDEMPOTENCY_LOCK_TIMEOUT_MS` (default 30 seconds).
+- Chat still has no transaction across user message, graph, and assistant message; a crash after partial persistence can leave partial history.
+
+```bash
+IDEMPOTENCY_TTL_HOURS=24
+IDEMPOTENCY_LOCK_TIMEOUT_MS=30000
+IDEMPOTENCY_CLEANUP_INTERVAL_MINUTES=60
+```
 
 API keys can be issued with `POST /v1/api-keys` and used as `Authorization: Bearer smriti_...` or `X-API-Key`. See the [architecture document](docs/architecture/v1-architecture.md) for the full contract.
 
@@ -174,18 +201,20 @@ DEDUP_TIMEOUT_MS=2000
 
 ## Scripts
 
-| Command           | Description                                  |
-| ----------------- | -------------------------------------------- |
-| `pnpm build`      | Build all packages                           |
-| `pnpm dev`        | Start API in watch mode                      |
-| `pnpm dev:worker` | Start worker in watch mode                   |
-| `pnpm test`       | Unit + API e2e tests                         |
-| `pnpm lint`       | ESLint                                       |
-| `pnpm typecheck`  | TypeScript check                             |
-| `pnpm eval`       | Deterministic agent-loop + chat eval + gate  |
-| `pnpm eval:live`  | Live DMR eval (local only, does not gate CI) |
-| `pnpm db:migrate` | Apply Prisma migrations                      |
-| `pnpm docker:up`  | Start local infrastructure                   |
+| Command                 | Description                                  |
+| ----------------------- | -------------------------------------------- |
+| `pnpm build`            | Build all packages                           |
+| `pnpm dev`              | Start API in watch mode                      |
+| `pnpm dev:worker`       | Start worker in watch mode                   |
+| `pnpm test`             | Unit + API e2e tests                         |
+| `pnpm lint`             | ESLint                                       |
+| `pnpm typecheck`        | TypeScript check                             |
+| `pnpm eval`             | Deterministic agent-loop + chat eval + gate  |
+| `pnpm eval:live`        | Live DMR eval (local only, does not gate CI) |
+| `pnpm openapi:generate` | Regenerate `docs/api/openapi.json`           |
+| `pnpm openapi:check`    | Fail if the checked-in contract is stale     |
+| `pnpm db:migrate`       | Apply Prisma migrations                      |
+| `pnpm docker:up`        | Start local infrastructure                   |
 
 `pnpm test` includes API e2e tests that require Postgres, Redis, and Qdrant; those tests are skipped when the database is unavailable.
 
@@ -201,7 +230,8 @@ packages/harness      Generic agent loop with policy caps and traces
 packages/eval         Deterministic eval suite + gate
 infrastructure/       Prisma, Qdrant, BullMQ, embedding adapters, fakes
 prisma/               Database schema and migrations
-docs/                 Architecture docs and ADRs
+docs/                 Architecture docs, ADRs, and OpenAPI contract
+scripts/              OpenAPI generation and drift checks
 docker/               Docker Compose and Dockerfiles
 eval/                 Tasks, baseline, reports
 ```
@@ -209,7 +239,8 @@ eval/                 Tasks, baseline, reports
 ## Documentation
 
 - [v1 Architecture](docs/architecture/v1-architecture.md)
+- [OpenAPI contract](docs/api/openapi.json)
 - [ADR index](docs/adr/)
 - [Eval harness](eval/README.md)
 
-Deferred: `/metrics`, request-level (including chat) idempotency keys, automatic duplicate merging, and object storage.
+Deferred: `/metrics`, automatic duplicate merging, and object storage.
