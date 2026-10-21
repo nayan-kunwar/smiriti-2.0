@@ -2,7 +2,7 @@
 
 Agentic memory assistant with a hexagonal memory pipeline: Postgres as the source of truth, asynchronous Qdrant indexing, BullMQ workers, and configurable embedding/chat providers.
 
-**Status:** v1 is implemented: memory CRUD, auth, semantic search, async indexing, reconciliation, REST/chat dedup, request idempotency for memory/chat writes, and the synchronous LangGraph `/v1/chat` slice.
+**Status:** v1 is implemented: memory CRUD, auth, semantic search, async indexing, reconciliation, REST/chat dedup, request idempotency for memory/chat writes, Prometheus metrics, and the synchronous LangGraph `/v1/chat` slice.
 
 ## What works
 
@@ -15,6 +15,7 @@ Agentic memory assistant with a hexagonal memory pipeline: Postgres as the sourc
 - LangGraph chat that classifies intent, extracts and stores memories, retrieves context, and persists both sides of a conversation.
 - Detect-only dedup for REST creates (`409`) and chat turns (skip persist + warning), with `?force=true` override.
 - Optional `Idempotency-Key` replay for `POST /v1/memories` and `POST /v1/chat`.
+- Prometheus metrics for API latency/status and worker job throughput/failures.
 - Deterministic agent-loop and chat eval gate plus a local-only live model runner.
 
 ## Prerequisites
@@ -51,7 +52,7 @@ Then run the API and worker in separate terminals:
 
 ```bash
 pnpm dev          # API on http://localhost:3000
-pnpm dev:worker   # BullMQ worker + reconcile/idempotency schedulers
+pnpm dev:worker   # BullMQ worker + schedulers; metrics on :9464
 ```
 
 Docker Compose loads `.env` automatically for the `full` profile:
@@ -199,6 +200,43 @@ DEDUP_SIMILARITY_THRESHOLD=0.92
 DEDUP_TIMEOUT_MS=2000
 ```
 
+## Observability
+
+The API exposes Prometheus metrics at `GET /metrics` (no auth, intended for internal scraping):
+
+```bash
+curl http://localhost:3000/metrics
+```
+
+The worker exposes its own registry on `WORKER_METRICS_PORT` (default `9464`):
+
+```bash
+curl http://localhost:9464/metrics
+```
+
+Metrics use bounded labels only. HTTP routes use the Express route template (`/v1/memories/:id`), never the raw URL; unmatched requests use `route="unmatched"`. Custom metrics:
+
+- `smriti_http_requests_total{method,route,status}`
+- `smriti_http_request_duration_seconds{method,route,status}`
+- `smriti_bullmq_jobs_total{queue,job,status}`
+- `smriti_bullmq_job_duration_seconds{queue,job,status}`
+
+The default process/Node.js metrics are prefixed with `smriti_`. Metrics endpoints should be reachable only from the monitoring network; they have no application-level auth. The Prometheus scrape itself is excluded from the HTTP metrics.
+
+```yaml
+scrape_configs:
+  - job_name: smriti-api
+    static_configs:
+      - targets: ['api:3000']
+  - job_name: smriti-worker
+    static_configs:
+      - targets: ['worker:9464']
+```
+
+```bash
+WORKER_METRICS_PORT=9464
+```
+
 ## Scripts
 
 | Command                 | Description                                  |
@@ -243,4 +281,4 @@ eval/                 Tasks, baseline, reports
 - [ADR index](docs/adr/)
 - [Eval harness](eval/README.md)
 
-Deferred: `/metrics`, automatic duplicate merging, and object storage.
+Deferred: automatic duplicate merging and object storage.

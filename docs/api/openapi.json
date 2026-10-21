@@ -994,6 +994,27 @@
         }
       }
     },
+    "/metrics": {
+      "get": {
+        "tags": [
+          "Ops"
+        ],
+        "summary": "Prometheus metrics",
+        "description": "Process metrics plus HTTP request counters/histograms. The worker exposes its own metrics on WORKER_METRICS_PORT.",
+        "responses": {
+          "200": {
+            "description": "Prometheus text exposition format",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/live": {
       "get": {
         "tags": [

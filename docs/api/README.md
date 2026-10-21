@@ -10,4 +10,4 @@ pnpm openapi:generate
 
 CI runs `pnpm openapi:check` and fails if the checked-in contract is stale.
 
-The contract covers auth, API keys, memories, search, chat/conversations, admin, and health endpoints. The Idempotency-Key header is documented on `POST /v1/memories` and `POST /v1/chat`.
+The contract covers auth, API keys, memories, search, chat/conversations, admin, health, and Prometheus metrics endpoints. The Idempotency-Key header is documented on `POST /v1/memories` and `POST /v1/chat`.

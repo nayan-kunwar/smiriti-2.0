@@ -7,6 +7,7 @@ export const ConfigSchema = z
   .object({
     NODE_ENV: z.enum(['development', 'production', 'test']).default('development'),
     PORT: z.coerce.number().int().positive().default(3000),
+    WORKER_METRICS_PORT: z.coerce.number().int().positive().max(65535).default(9464),
     LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace']).default('info'),
     DATABASE_URL: z.string().url().or(z.string().startsWith('postgresql://')),
     REDIS_URL: z.string().url().or(z.string().startsWith('redis://')),

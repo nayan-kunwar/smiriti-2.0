@@ -15,7 +15,8 @@
     "@smriti/shared": "workspace:^",
     "bcrypt": "^6.0.0",
     "bullmq": "^5.34.0",
-    "ioredis": "^5.4.2"
+    "ioredis": "^5.4.2",
+    "prom-client": "^15.1.3"
   },
   "devDependencies": {
     "@types/bcrypt": "^6.0.0",

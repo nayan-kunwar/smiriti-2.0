@@ -1,9 +1,9 @@
 # Smriti v1 Architecture
 
-> **Status**: v1 implemented (memory CRUD, semantic search, async indexing, reconciliation, REST/chat dedup, request idempotency, and LangGraph `/v1/chat`).
+> **Status**: v1 implemented (memory CRUD, semantic search, async indexing, reconciliation, REST/chat dedup, request idempotency, Prometheus metrics, and LangGraph `/v1/chat`).
 > **Scope**: Long-term + semantic memory, REST APIs, LangGraph `/chat`, embedding pipeline, auth, observability
-> **Not in v1**: `/metrics`, object storage, DLQ, auth/API-key audit events, per-user rate-limit tracking, streaming chat/checkpointing.
-> **Last updated**: 2026-10-20
+> **Not in v1**: object storage, DLQ, auth/API-key audit events, per-user rate-limit tracking, streaming chat/checkpointing.
+> **Last updated**: 2026-10-21
 
 ---
 
@@ -61,6 +61,7 @@ Embedding vectors are **provider-scoped**. A collection is never shared across p
 
 - **Local**: `pnpm docker:up` runs Postgres, Redis, Qdrant, Ollama, and MinIO. Docker Model Runner is host-native (Docker Desktop) at `http://localhost:12434/engines/v1`; containers reach it at `http://model-runner.docker.internal/engines/v1`.
 - **Production**: Two container types (API + worker) against managed Postgres, Redis, Qdrant, and a configured embedding/chat provider. No Kubernetes coupling; env-driven config only.
+- **Metrics**: Prometheus scrapes the API at `GET /metrics` (API port) and the worker at `GET /metrics` on `WORKER_METRICS_PORT` (default `9464`). Both are internal-network endpoints, not user-facing APIs.
 - **Consistency model**: Postgres is SoT. A durable `memory_index_states` row is authoritative for `indexingStatus`; Qdrant is eventually consistent (target SLA < 30s under normal load) and is repaired by a scheduled reconciler.
 
 ---
@@ -344,7 +345,7 @@ The partial indexes for pinned/archived listings were designed but are **not yet
 
 ## 5. API Contract
 
-All endpoints are prefixed with `/v1`. `Idempotency-Key` is supported on `POST /v1/memories` and `POST /v1/chat`. `/metrics` remains unimplemented.
+All user-facing endpoints are prefixed with `/v1`. Operational endpoints (`/health`, `/live`, `/ready`, `/metrics`) are unprefixed. `Idempotency-Key` is supported on `POST /v1/memories` and `POST /v1/chat`.
 
 ### 5.1 Auth
 
@@ -486,12 +487,12 @@ Search hits currently report `indexingStatus: "indexed"` because they come from 
 
 ### 5.5 Ops
 
-| Method | Path       | Description                                            |
-| ------ | ---------- | ------------------------------------------------------ |
-| GET    | `/health`  | Basic health                                           |
-| GET    | `/ready`   | Postgres readiness; Qdrant probed; Redis `not_checked` |
-| GET    | `/live`    | Liveness                                               |
-| GET    | `/metrics` | Prometheus format (not implemented)                    |
+| Method | Path       | Description                                                |
+| ------ | ---------- | ---------------------------------------------------------- |
+| GET    | `/health`  | Basic health                                               |
+| GET    | `/ready`   | Postgres readiness; Qdrant probed; Redis `not_checked`     |
+| GET    | `/live`    | Liveness                                                   |
+| GET    | `/metrics` | Prometheus format (API); worker uses `WORKER_METRICS_PORT` |
 
 `/ready` returns `status: "ready"` when Postgres responds. Qdrant and Redis results are informational in `checks` and do not currently gate readiness.
 
@@ -698,6 +699,7 @@ Validated at boot via Zod (`packages/shared/src/config.ts`). Application **fails
 | -------------------------------------- | --------- | ------------------------------------------- | ---------------------------------------------------------------- |
 | `NODE_ENV`                             | no        | `development`                               | Runtime mode                                                     |
 | `PORT`                                 | no        | `3000`                                      | API listen port                                                  |
+| `WORKER_METRICS_PORT`                  | no        | `9464`                                      | Worker Prometheus listen port                                    |
 | `LOG_LEVEL`                            | no        | `info`                                      | Pino level                                                       |
 | `DATABASE_URL`                         | yes       | —                                           | Postgres connection                                              |
 | `REDIS_URL`                            | yes       | —                                           | Redis connection (BullMQ)                                        |
@@ -776,7 +778,8 @@ Code defaults are `EMBEDDING_PROVIDER=ollama` and `LLM_PROVIDER=openai`; `.env.e
 - JWT access tokens: short-lived, Bearer header.
 - API keys: `Authorization: Bearer smriti_...` or `X-API-Key` header.
 - Admin endpoints: `role === admin` guard.
-- Worker: no public HTTP; connects only to internal services via env config.
+- Worker: no user-facing API; exposes only `GET /metrics` on `WORKER_METRICS_PORT` for internal scraping and connects only to internal services via env config.
+- Metrics: `/metrics` is unauthenticated on both processes. Expose it only on a private network or behind an ingress policy; it contains operational metadata, not memory content.
 
 ---
 
@@ -793,7 +796,7 @@ smriti-2.0/
 │   ├── shared/           # Zod schemas, error types, config types
 │   ├── harness/          # Agent loop, tool policy, retries, checkpoints/traces
 │   └── eval/             # Deterministic eval runner, scoring, gate, DMR live model
-├── infrastructure/       # Prisma, Qdrant, Redis/BullMQ, provider adapters
+├── infrastructure/       # Prisma, Qdrant, Redis/BullMQ, provider adapters, metrics
 ├── prisma/
 ├── docker/
 ├── docs/
@@ -817,19 +820,46 @@ The reconciler runs in the worker. It can force re-enqueue a memory whose job ID
 
 ---
 
-## 12. Testing Strategy
+## 12. Observability
 
-| Layer        | Tool                     | Scope                                                                        |
-| ------------ | ------------------------ | ---------------------------------------------------------------------------- |
-| Domain       | Vitest + fakes           | Aggregate invariants, chunking, point IDs                                    |
-| Application  | Vitest + fake ports      | Use cases, chat graph (remember/recall/dedup), embedding/reconcile handlers  |
-| Repositories | Vitest + in-memory fakes | Repository port behavior; no Prisma adapter integration suite yet            |
-| API          | Supertest + Postgres     | Auth, memory CRUD/search/dedup, chat/conversations; skipped without Postgres |
-| Jobs         | Vitest + fake ports      | Embed/index, stale-chunk pruning, reconcile handlers; no worker-process test |
-| Agent loop   | `pnpm eval` gate         | Harness policy, tools, injection, retry/resume                               |
-| Chat suite   | `pnpm eval` gate         | Remember, recall, dedup, general chat, conversation writes                   |
-| Idempotency  | Vitest + fake/Postgres   | Replay, payload mismatch, in-progress conflict, abort, expiry                |
-| Live models  | `pnpm eval:live` (DMR)   | Local exploration only; never gates CI                                       |
+### 12.1 Logs and correlation
+
+Pino emits structured JSON logs in the API and worker. The API correlation ID comes from `CORRELATION_ID_HEADER` or a generated UUID, appears in every request log line, and is attached to jobs through their payload. The global exception filter returns the same correlation ID in error responses.
+
+### 12.2 Metrics
+
+`infrastructure/src/metrics/metrics.ts` owns an isolated Prometheus registry. The API creates one registry in `MetricsModule`; the worker creates one at startup and serves it over HTTP.
+
+| Metric                                 | Type      | Labels                      | Source                               |
+| -------------------------------------- | --------- | --------------------------- | ------------------------------------ |
+| `smriti_http_requests_total`           | counter   | `method`, `route`, `status` | API middleware                       |
+| `smriti_http_request_duration_seconds` | histogram | `method`, `route`, `status` | API middleware                       |
+| `smriti_bullmq_jobs_total`             | counter   | `queue`, `job`, `status`    | Worker `completed` / `failed` events |
+| `smriti_bullmq_job_duration_seconds`   | histogram | `queue`, `job`, `status`    | Worker `completed` / `failed` events |
+| `smriti_process_*`, `smriti_nodejs_*`  | mixed     | process/runtime             | `prom-client` default collectors     |
+
+HTTP route labels use the Express route template, not the raw URL; unmatched requests use `route="unmatched"`. This bounds label cardinality. The API skips recording `GET /metrics` itself, and the default collectors are disabled under `NODE_ENV=test`/Vitest to avoid prom-client's event-loop timer in tests. Histogram buckets cover 5 ms through 10 s.
+
+### 12.3 Health and scraping
+
+`GET /health`, `GET /live`, and `GET /ready` are unauthenticated operational endpoints. `/ready` currently gates only on Postgres; Qdrant and Redis results are informational. Scrape the API on its normal port and the worker on `WORKER_METRICS_PORT`. Both metrics endpoints are unauthenticated and must be restricted at the network layer.
+
+---
+
+## 13. Testing Strategy
+
+| Layer         | Tool                     | Scope                                                                        |
+| ------------- | ------------------------ | ---------------------------------------------------------------------------- |
+| Domain        | Vitest + fakes           | Aggregate invariants, chunking, point IDs                                    |
+| Application   | Vitest + fake ports      | Use cases, chat graph (remember/recall/dedup), embedding/reconcile handlers  |
+| Repositories  | Vitest + in-memory fakes | Repository port behavior; no Prisma adapter integration suite yet            |
+| API           | Supertest + Postgres     | Auth, memory CRUD/search/dedup, chat/conversations; skipped without Postgres |
+| Jobs          | Vitest + fake ports      | Embed/index, stale-chunk pruning, reconcile handlers; no worker-process test |
+| Agent loop    | `pnpm eval` gate         | Harness policy, tools, injection, retry/resume                               |
+| Chat suite    | `pnpm eval` gate         | Remember, recall, dedup, general chat, conversation writes                   |
+| Idempotency   | Vitest + fake/Postgres   | Replay, payload mismatch, in-progress conflict, abort, expiry                |
+| Observability | Vitest + Supertest       | Metric rendering, bounded HTTP route labels, scrape exclusion                |
+| Live models   | `pnpm eval:live` (DMR)   | Local exploration only; never gates CI                                       |
 
 `pnpm test` runs unit/application tests and the API e2e suite when Postgres is reachable. The memory/chat API specs replace embeddings, the job queue, and Qdrant with fakes; the chat spec also supplies a fake `ChatModel`. When Postgres is unavailable the suite is skipped. CI runs format check, lint, typecheck, migrations, tests, the deterministic eval gate, and Docker image builds, with Postgres and Redis service containers (no Qdrant).
 

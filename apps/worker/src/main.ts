@@ -1,3 +1,4 @@
+import { createServer } from 'node:http';
 import pino from 'pino';
 import { Queue, Worker } from 'bullmq';
 import { loadConfig } from '@smriti/shared';
@@ -14,6 +15,7 @@ import {
   createEmbeddingProvider,
   disconnectPrisma,
   getPrismaClient,
+  Metrics,
   PrismaIdempotencyStore,
   PrismaMemoryEmbeddingStore,
   PrismaMemoryIndexStateStore,
@@ -25,6 +27,7 @@ import {
 import { handleDeleteVectors, handleEmbedAndIndex, reconcileVectors } from '@smriti/application';
 
 const logger = pino({ level: process.env.LOG_LEVEL ?? 'info' });
+const metrics = new Metrics();
 const RECONCILE_SCHEDULER_ID = 'reconcile-vectors';
 
 function errorMessage(err: unknown): string {
@@ -122,11 +125,31 @@ async function main(): Promise<void> {
     { connection },
   );
 
+  function jobDurationSeconds(processedOn?: number, finishedOn?: number): number {
+    const start = processedOn ?? Date.now();
+    const end = finishedOn ?? Date.now();
+    return Math.max(0, (end - start) / 1000);
+  }
+
   worker.on('completed', (job) => {
+    metrics.observeJob(
+      SMRITI_QUEUE_NAME,
+      job.name,
+      'completed',
+      jobDurationSeconds(job.processedOn ?? job.timestamp, job.finishedOn),
+    );
     logger.info({ jobId: job.id }, 'Job completed');
   });
 
   worker.on('failed', (job, err) => {
+    if (job) {
+      metrics.observeJob(
+        SMRITI_QUEUE_NAME,
+        job.name,
+        'failed',
+        jobDurationSeconds(job.processedOn ?? job.timestamp, job.finishedOn),
+      );
+    }
     logger.error({ jobId: job?.id, err }, 'Job failed');
   });
 
@@ -154,10 +177,43 @@ async function main(): Promise<void> {
     'Idempotency cleanup scheduler registered',
   );
 
+  const metricsServer = createServer(async (request, response) => {
+    const path = (request.url ?? '/').split('?')[0];
+    if (request.method !== 'GET' || path !== '/metrics') {
+      response.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' });
+      response.end('Not found');
+      return;
+    }
+
+    try {
+      const body = await metrics.render();
+      response.writeHead(200, {
+        'Content-Type': metrics.contentType,
+        'Cache-Control': 'no-store',
+      });
+      response.end(body);
+    } catch (err) {
+      logger.error({ err }, 'Failed to render worker metrics');
+      response.writeHead(500, { 'Content-Type': 'text/plain; charset=utf-8' });
+      response.end('Metrics unavailable');
+    }
+  });
+  metricsServer.on('error', (err) => {
+    logger.error({ err, port: config.WORKER_METRICS_PORT }, 'Worker metrics server error');
+  });
+  metricsServer.listen(config.WORKER_METRICS_PORT, () => {
+    logger.info({ port: config.WORKER_METRICS_PORT }, 'Worker metrics server listening');
+  });
+
   logger.info('Worker started, waiting for jobs...');
 
   const shutdown = async () => {
     logger.info('Shutting down worker...');
+    if (metricsServer.listening) {
+      await new Promise<void>((resolve) => {
+        metricsServer.close(() => resolve());
+      });
+    }
     await worker.close();
     await jobQueue.close();
     await schedulerQueue.close();

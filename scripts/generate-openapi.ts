@@ -240,6 +240,21 @@ registry.registerPath({
 
 registry.registerPath({
   method: 'get',
+  path: '/metrics',
+  tags: ['Ops'],
+  summary: 'Prometheus metrics',
+  description:
+    'Process metrics plus HTTP request counters/histograms. The worker exposes its own metrics on WORKER_METRICS_PORT.',
+  responses: {
+    200: {
+      description: 'Prometheus text exposition format',
+      content: { 'text/plain': { schema: { type: 'string' as const } } },
+    },
+  },
+});
+
+registry.registerPath({
+  method: 'get',
   path: '/live',
   tags: ['Ops'],
   summary: 'Liveness check',

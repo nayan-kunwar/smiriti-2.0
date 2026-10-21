@@ -107,6 +107,8 @@ services:
       OLLAMA_BASE_URL: http://ollama:11434
       # See api service comment for DMR container URL.
       S3_ENDPOINT: http://minio:9000
+    ports:
+      - '9464:9464'
     depends_on:
       postgres:
         condition: service_healthy

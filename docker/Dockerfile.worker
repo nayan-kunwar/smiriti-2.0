@@ -15,4 +15,5 @@ COPY --from=build /app/apps/worker/package.json ./apps/worker/
 COPY --from=build /app/packages ./packages
 COPY --from=build /app/infrastructure ./infrastructure
 COPY --from=build /app/prisma ./prisma
+EXPOSE 9464
 CMD ["node", "apps/worker/dist/main.js"]
