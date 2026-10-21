@@ -2,11 +2,11 @@
 
 Agentic memory assistant with a hexagonal memory pipeline: Postgres as the source of truth, asynchronous Qdrant indexing, BullMQ workers, and configurable embedding/chat providers.
 
-**Status:** v1 is implemented: memory CRUD, auth, semantic search, async indexing, reconciliation, REST/chat dedup, request idempotency for memory/chat writes, Prometheus metrics, and the synchronous LangGraph `/v1/chat` slice.
+**Status:** v1 is implemented: memory CRUD, auth, per-principal rate limiting, auth/API-key audit events, semantic search, async indexing, reconciliation, REST/chat dedup, request idempotency for memory/chat writes, Prometheus metrics, and the synchronous LangGraph `/v1/chat` slice.
 
 ## What works
 
-- Email/password registration and login, refresh-token rotation, API keys, and admin user/audit-log endpoints.
+- Email/password registration and login, refresh-token rotation, API keys, per-principal rate limiting, and admin user/audit-log endpoints.
 - Memory CRUD for `long_term` and `semantic` memories with tags, categories, pin/archive, and cursor pagination.
 - Semantic search over Qdrant with metadata filters.
 - Asynchronous chunking → embedding → Qdrant indexing, with durable `pending` / `indexed` / `failed` status.
@@ -168,6 +168,25 @@ IDEMPOTENCY_CLEANUP_INTERVAL_MINUTES=60
 ```
 
 API keys can be issued with `POST /v1/api-keys` and used as `Authorization: Bearer smriti_...` or `X-API-Key`. See the [architecture document](docs/architecture/v1-architecture.md) for the full contract.
+
+## Rate limits and audit events
+
+Rate limits are scoped by authenticated principal and route:
+
+- JWT requests share a `user:<id>` bucket.
+- Each API key has its own `api-key:<id>` bucket.
+- Public routes fall back to the client IP. Protected routes authenticate before throttling.
+
+The default limit is `RATE_LIMIT_MAX` requests per `RATE_LIMIT_TTL` seconds. `POST /v1/chat` and `POST /v1/memories/search` also enforce the named `expensive` limit (`RATE_LIMIT_EXPENSIVE_MAX` per `RATE_LIMIT_EXPENSIVE_TTL` seconds). A blocked request returns `429` with `reason: "RATE_LIMIT_EXCEEDED"`, `retryAfterSeconds`, and `Retry-After` (or `Retry-After-expensive`). Successful responses include `X-RateLimit-*` headers; expensive routes also include the `-expensive` suffix.
+
+```bash
+RATE_LIMIT_TTL=60
+RATE_LIMIT_MAX=100
+RATE_LIMIT_EXPENSIVE_TTL=60
+RATE_LIMIT_EXPENSIVE_MAX=20
+```
+
+Auth and API-key lifecycle events are written to `audit_logs`: `auth.register`, `auth.login`, `auth.login_failed`, `auth.refresh`, `auth.logout`, `api_key.create`, and `api_key.revoke`. Payload snapshots never contain passwords, refresh tokens, or API-key plaintext. Audit writes are best-effort; failures are logged with the correlation ID. Failed logins for unknown emails cannot be attributed to a user and are not written to `audit_logs`.
 
 ## Indexing and reconciliation
 

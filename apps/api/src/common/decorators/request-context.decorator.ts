@@ -6,6 +6,7 @@ export interface AuthenticatedUser {
   userId: string;
   role: UserRole;
   authMethod: 'jwt' | 'api_key';
+  apiKeyId?: string;
 }
 
 export type RequestWithUser = Request & {

@@ -82,6 +82,7 @@ describe.skipIf(!dbAvailable)('Auth API (e2e)', () => {
   it('POST /v1/auth/login returns tokens', async () => {
     const response = await request(app.getHttpServer())
       .post('/v1/auth/login')
+      .set('x-correlation-id', 'auth-login-test')
       .send({
         email: (await prisma.user.findUnique({ where: { id: userId } }))!.email,
         password: 'password123',
@@ -90,6 +91,27 @@ describe.skipIf(!dbAvailable)('Auth API (e2e)', () => {
 
     expect(response.body.accessToken).toBeTruthy();
     expect(response.body.refreshToken).toBeTruthy();
+  });
+
+  it('audits a failed login for an existing account', async () => {
+    const user = await prisma.user.findUniqueOrThrow({ where: { id: userId } });
+
+    await request(app.getHttpServer())
+      .post('/v1/auth/login')
+      .set('x-correlation-id', 'auth-login-failed-test')
+      .send({ email: user.email, password: 'wrong-password' })
+      .expect(401);
+
+    const audit = await prisma.auditLog.findFirst({
+      where: { userId, action: 'auth.login_failed' },
+    });
+
+    expect(audit).not.toBeNull();
+    expect(audit?.correlationId).toBe('auth-login-failed-test');
+    expect(audit?.payloadSnapshot).toMatchObject({
+      email: user.email,
+      reason: 'invalid_credentials',
+    });
   });
 
   it('POST /v1/auth/refresh rotates refresh token', async () => {
@@ -134,6 +156,34 @@ describe.skipIf(!dbAvailable)('Auth API (e2e)', () => {
 
   it('POST /v1/auth/logout revokes refresh token', async () => {
     await request(app.getHttpServer()).post('/v1/auth/logout').send({ refreshToken }).expect(204);
+  });
+
+  it('records auth and API-key lifecycle audit events', async () => {
+    const logs = await prisma.auditLog.findMany({
+      where: { userId },
+      select: { action: true, correlationId: true, payloadSnapshot: true },
+    });
+    const actions = logs.map((entry) => entry.action);
+
+    expect(actions).toEqual(
+      expect.arrayContaining([
+        'auth.register',
+        'auth.login',
+        'auth.login_failed',
+        'auth.refresh',
+        'api_key.create',
+        'api_key.revoke',
+        'auth.logout',
+      ]),
+    );
+    expect(logs.find((entry) => entry.action === 'auth.login')?.correlationId).toBe(
+      'auth-login-test',
+    );
+
+    const serialized = JSON.stringify(logs);
+    expect(serialized).not.toContain('password123');
+    expect(serialized).not.toContain('refreshToken');
+    expect(serialized).not.toContain('smriti_');
   });
 });
 

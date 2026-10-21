@@ -536,6 +536,98 @@ const document = generator.generateDocument({
   ],
 });
 
+const headerDefinitions = {
+  RetryAfter: {
+    description: 'Seconds until the default throttler allows the request again.',
+    schema: { type: 'integer' as const, minimum: 1 },
+  },
+  RetryAfterExpensive: {
+    description: 'Seconds until the expensive-route throttler allows the request again.',
+    schema: { type: 'integer' as const, minimum: 1 },
+  },
+  RateLimitLimit: {
+    description: 'Request limit for the default throttler.',
+    schema: { type: 'integer' as const },
+  },
+  RateLimitRemaining: {
+    description: 'Remaining requests in the default window.',
+    schema: { type: 'integer' as const, minimum: 0 },
+  },
+  RateLimitReset: {
+    description: 'Seconds until the default window resets.',
+    schema: { type: 'integer' as const, minimum: 0 },
+  },
+  ExpensiveRateLimitLimit: {
+    description: 'Request limit for the expensive-route throttler.',
+    schema: { type: 'integer' as const },
+  },
+  ExpensiveRateLimitRemaining: {
+    description: 'Remaining requests in the expensive-route window.',
+    schema: { type: 'integer' as const, minimum: 0 },
+  },
+  ExpensiveRateLimitReset: {
+    description: 'Seconds until the expensive-route window resets.',
+    schema: { type: 'integer' as const, minimum: 0 },
+  },
+};
+
+const components = document.components as { headers?: Record<string, unknown> };
+components.headers = { ...components.headers, ...headerDefinitions };
+
+const headerRef = (name: keyof typeof headerDefinitions) => ({
+  $ref: `#/components/headers/${name}`,
+});
+
+const retryAfterHeaders = {
+  'Retry-After': headerRef('RetryAfter'),
+  'Retry-After-expensive': headerRef('RetryAfterExpensive'),
+};
+
+const rateLimitHeaders = {
+  'X-RateLimit-Limit': headerRef('RateLimitLimit'),
+  'X-RateLimit-Remaining': headerRef('RateLimitRemaining'),
+  'X-RateLimit-Reset': headerRef('RateLimitReset'),
+};
+
+const expensiveRateLimitHeaders = {
+  'X-RateLimit-Limit-expensive': headerRef('ExpensiveRateLimitLimit'),
+  'X-RateLimit-Remaining-expensive': headerRef('ExpensiveRateLimitRemaining'),
+  'X-RateLimit-Reset-expensive': headerRef('ExpensiveRateLimitReset'),
+};
+
+const rateLimitResponse = {
+  description:
+    'Rate limit exceeded for the authenticated user, API key, or client IP. Expensive routes use the -expensive header suffix.',
+  headers: retryAfterHeaders,
+  content: {
+    'application/json': {
+      schema: { $ref: '#/components/schemas/ErrorResponse' },
+    },
+  },
+};
+
+type GeneratedResponse = { headers?: Record<string, unknown> };
+type GeneratedOperation = { responses?: Record<string, GeneratedResponse | undefined> };
+for (const [path, pathItem] of Object.entries(document.paths)) {
+  if (path === '/metrics') continue;
+  const expensive = path === '/v1/chat' || path === '/v1/memories/search';
+  const operations = pathItem as Record<string, GeneratedOperation | undefined>;
+  for (const method of ['get', 'post', 'put', 'patch', 'delete']) {
+    const operation = operations[method];
+    if (!operation?.responses) continue;
+
+    operation.responses['429'] = rateLimitResponse;
+    for (const [status, response] of Object.entries(operation.responses)) {
+      if (!response || !/^2\d\d$/.test(status)) continue;
+      response.headers = {
+        ...rateLimitHeaders,
+        ...(expensive ? expensiveRateLimitHeaders : {}),
+        ...response.headers,
+      };
+    }
+  }
+}
+
 const serialized = `${JSON.stringify(document, null, 2)}\n`;
 
 if (process.argv.includes('--check')) {

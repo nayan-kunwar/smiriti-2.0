@@ -126,13 +126,14 @@ export async function refreshSession(
   return { user: toUserDto(user), refreshToken: newRefreshToken };
 }
 
-export async function logoutUser(deps: LogoutDeps, refreshToken: string): Promise<void> {
+export async function logoutUser(deps: LogoutDeps, refreshToken: string): Promise<string | null> {
   const tokenHash = hashToken(refreshToken);
   const existing = await deps.refreshTokenRepository.findByTokenHash(tokenHash);
   if (!existing || existing.revokedAt) {
-    return;
+    return null;
   }
   await deps.refreshTokenRepository.revoke(existing.id);
+  return existing.userId;
 }
 
 export async function createApiKey(

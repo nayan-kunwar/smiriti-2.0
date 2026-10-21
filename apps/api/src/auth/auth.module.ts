@@ -5,11 +5,13 @@ import { ThrottlerModule } from '@nestjs/throttler';
 import { AppConfigModule, APP_CONFIG } from '../config/config.module.js';
 import type { AppConfig } from '@smriti/shared';
 import { AuthController, ApiKeysController } from './auth.controller.js';
+import { AuthAuditService } from './auth-audit.service.js';
 import { AuthService } from './auth.service.js';
 import { AuthGuard } from './guards/auth.guard.js';
 import { RolesGuard } from './guards/roles.guard.js';
 import { AppThrottlerGuard } from './guards/app-throttler.guard.js';
 import { RedisThrottlerStorage } from './redis-throttler.storage.js';
+import { isExpensiveThrottleRoute } from './throttle-policy.js';
 
 @Module({
   imports: [
@@ -26,8 +28,15 @@ import { RedisThrottlerStorage } from './redis-throttler.storage.js';
       useFactory: (config: AppConfig) => ({
         throttlers: [
           {
+            name: 'default',
             ttl: config.RATE_LIMIT_TTL * 1000,
             limit: config.RATE_LIMIT_MAX,
+          },
+          {
+            name: 'expensive',
+            ttl: config.RATE_LIMIT_EXPENSIVE_TTL * 1000,
+            limit: config.RATE_LIMIT_EXPENSIVE_MAX,
+            skipIf: (context) => !isExpensiveThrottleRoute(context),
           },
         ],
         storage: new RedisThrottlerStorage(config.REDIS_URL),
@@ -37,11 +46,13 @@ import { RedisThrottlerStorage } from './redis-throttler.storage.js';
   controllers: [AuthController, ApiKeysController],
   providers: [
     AuthService,
+    AuthAuditService,
     AuthGuard,
     RolesGuard,
     AppThrottlerGuard,
-    { provide: APP_GUARD, useExisting: AppThrottlerGuard },
+    // Auth must run first so the throttler can key by user/API key, not only IP.
     { provide: APP_GUARD, useExisting: AuthGuard },
+    { provide: APP_GUARD, useExisting: AppThrottlerGuard },
     { provide: APP_GUARD, useExisting: RolesGuard },
   ],
   exports: [AuthService, JwtModule],

@@ -10,4 +10,4 @@ pnpm openapi:generate
 
 CI runs `pnpm openapi:check` and fails if the checked-in contract is stale.
 
-The contract covers auth, API keys, memories, search, chat/conversations, admin, health, and Prometheus metrics endpoints. The Idempotency-Key header is documented on `POST /v1/memories` and `POST /v1/chat`.
+The contract covers auth, API keys, memories, search, chat/conversations, admin, health, and Prometheus metrics endpoints. The Idempotency-Key header is documented on `POST /v1/memories` and `POST /v1/chat`. Every rate-limited operation documents `429` with `Retry-After`/`Retry-After-expensive`, `reason: RATE_LIMIT_EXCEEDED`, and `retryAfterSeconds`; successful responses document the `X-RateLimit-*` headers.

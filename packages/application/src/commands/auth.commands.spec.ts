@@ -146,10 +146,17 @@ describe('Auth use cases', () => {
     expect(refreshed.user.id).toBe(registered.user.id);
     expect(refreshed.refreshToken).not.toBe(loggedIn.refreshToken);
 
-    await logoutUser(
+    const loggedOutUserId = await logoutUser(
       { refreshTokenRepository: authDeps.refreshTokenRepository },
       refreshed.refreshToken,
     );
+    expect(loggedOutUserId).toBe(registered.user.id);
+    expect(
+      await logoutUser(
+        { refreshTokenRepository: authDeps.refreshTokenRepository },
+        refreshed.refreshToken,
+      ),
+    ).toBeNull();
   });
 
   it('creates and revokes API keys', async () => {

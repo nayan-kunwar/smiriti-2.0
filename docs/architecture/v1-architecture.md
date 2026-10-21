@@ -1,8 +1,8 @@
 # Smriti v1 Architecture
 
-> **Status**: v1 implemented (memory CRUD, semantic search, async indexing, reconciliation, REST/chat dedup, request idempotency, Prometheus metrics, and LangGraph `/v1/chat`).
+> **Status**: v1 implemented (memory CRUD, semantic search, async indexing, reconciliation, REST/chat dedup, request idempotency, per-principal rate limiting, auth/API-key audit events, Prometheus metrics, and LangGraph `/v1/chat`).
 > **Scope**: Long-term + semantic memory, REST APIs, LangGraph `/chat`, embedding pipeline, auth, observability
-> **Not in v1**: object storage, DLQ, auth/API-key audit events, per-user rate-limit tracking, streaming chat/checkpointing.
+> **Not in v1**: object storage, DLQ, streaming chat/checkpointing.
 > **Last updated**: 2026-10-21
 
 ---
@@ -358,6 +358,10 @@ All user-facing endpoints are prefixed with `/v1`. Operational endpoints (`/heal
 | POST   | `/v1/api-keys`      | Issue API key (plaintext shown once) |
 | DELETE | `/v1/api-keys/:id`  | Revoke API key                       |
 
+Auth and API-key mutations are audited with the request correlation ID. Audit actions are `auth.register`, `auth.login`, `auth.login_failed`, `auth.refresh`, `auth.logout`, `api_key.create`, and `api_key.revoke`. Payload snapshots contain safe metadata only; passwords, refresh tokens, and API-key plaintext are never stored. Audit writes are best-effort so an audit-sink failure cannot block authentication; failures are logged. Failed logins for an unknown email cannot be attributed to a user and are not written to `audit_logs`.
+
+The global `AuthGuard` runs before the throttler so limits can use the authenticated principal. JWT requests use `user:<userId>`; API-key requests use `api-key:<apiKeyId>`; public requests use `ip:<address>`. Limits are per operation and throttler. The `default` throttler uses `RATE_LIMIT_MAX` / `RATE_LIMIT_TTL`; the named `expensive` throttler applies to `POST /v1/chat` and `POST /v1/memories/search` using `RATE_LIMIT_EXPENSIVE_MAX` / `RATE_LIMIT_EXPENSIVE_TTL`. A blocked request returns `429` with `reason: "RATE_LIMIT_EXCEEDED"`, `retryAfterSeconds`, and `Retry-After` (or `Retry-After-expensive`). Successful responses include `X-RateLimit-*` headers; expensive routes also include the `-expensive` suffix.
+
 ### 5.2 Memories
 
 | Method | Path                  | Description                 |
@@ -506,8 +510,8 @@ Search hits currently report `indexingStatus: "indexed"` because they come from 
   correlationId: string;
   existingMemoryId?: string; // 409 dedup conflict
   similarity?: number;       // 409 dedup conflict
-  reason?: string;           // 409 idempotency conflict
-  retryAfterSeconds?: number; // 409 in-progress conflict
+  reason?: string;           // 409 idempotency conflict or 429 rate limit
+  retryAfterSeconds?: number; // 409 in-progress conflict or 429 rate limit
   details?: unknown;         // validation errors
 }
 ```
@@ -719,8 +723,10 @@ Validated at boot via Zod (`packages/shared/src/config.ts`). Application **fails
 | `JWT_SECRET`                           | yes       | —                                           | Access-token signing secret (min 16 chars)                       |
 | `JWT_EXPIRES_IN`                       | no        | `15m`                                       | Access token TTL                                                 |
 | `REFRESH_TOKEN_EXPIRES_IN`             | no        | `7d`                                        | Refresh token TTL                                                |
-| `RATE_LIMIT_TTL`                       | no        | `60`                                        | Rate-limit window (seconds)                                      |
-| `RATE_LIMIT_MAX`                       | no        | `100`                                       | Requests per window                                              |
+| `RATE_LIMIT_TTL`                       | no        | `60`                                        | Default per-principal rate-limit window (seconds)                |
+| `RATE_LIMIT_MAX`                       | no        | `100`                                       | Default requests per principal/window                            |
+| `RATE_LIMIT_EXPENSIVE_TTL`             | no        | `60`                                        | Expensive-route rate-limit window (seconds)                      |
+| `RATE_LIMIT_EXPENSIVE_MAX`             | no        | `20`                                        | Expensive-route requests per principal/window                    |
 | `DEDUP_SIMILARITY_THRESHOLD`           | no        | `0.92`                                      | REST/chat duplicate threshold                                    |
 | `DEDUP_TIMEOUT_MS`                     | no        | `2000`                                      | Best-effort dedup/retrieval timeout                              |
 | `IDEMPOTENCY_TTL_HOURS`                | no        | `24`                                        | Idempotency response cache TTL                                   |
@@ -761,22 +767,23 @@ Code defaults are `EMBEDDING_PROVIDER=ollama` and `LLM_PROVIDER=openai`; `.env.e
 
 ### 9.3 Threats and Mitigations
 
-| Threat                                   | Impact                             | Mitigation                                                                                                                               |
-| ---------------------------------------- | ---------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
-| **Prompt injection** via stored memories | LLM executes attacker instructions | Delimited context blocks; system prompt treats retrieved data as untrusted; eval suite tests injection cases                             |
-| **Cross-tenant data access**             | User A reads User B's memories     | All queries scoped by `user_id` from JWT/API key; repository enforces ownership                                                          |
-| **API key leakage**                      | Full account access                | Keys stored hashed; shown once at creation; rotation via delete + reissue                                                                |
-| **Rate abuse / DoS**                     | Service degradation                | Redis-backed rate limiting per client IP (Nest throttler default, in-memory fallback); per-user tracking deferred                        |
-| **SQL injection**                        | Data breach                        | Prisma parameterized queries; no raw SQL without review                                                                                  |
-| **Duplicate writes on retry**            | Duplicate memories or chat turns   | Optional `Idempotency-Key` replay on memory create and chat; deterministic BullMQ job IDs + `memory_index_states` hash guards            |
-| **Stale vector leakage after delete**    | Deleted memory still searchable    | Delete job + scheduled reconciler with Postgres existence check; document brief consistency window                                       |
-| **Secrets in repo**                      | Credential exposure                | `.env` gitignored; platform secret store in prod                                                                                         |
-| **Insufficient audit trail**             | Compliance failure                 | Memory create/update/delete are logged with correlation ID, action, entity, and content hash; auth/API-key mutations are not yet audited |
+| Threat                                   | Impact                             | Mitigation                                                                                                                                            |
+| ---------------------------------------- | ---------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Prompt injection** via stored memories | LLM executes attacker instructions | Delimited context blocks; system prompt treats retrieved data as untrusted; eval suite tests injection cases                                          |
+| **Cross-tenant data access**             | User A reads User B's memories     | All queries scoped by `user_id` from JWT/API key; repository enforces ownership                                                                       |
+| **API key leakage**                      | Full account access                | Keys stored hashed; shown once at creation; rotation via delete + reissue                                                                             |
+| **Rate abuse / DoS**                     | Service degradation                | Redis-backed limits keyed by JWT user, API-key ID, or client IP; named expensive limit for chat/search; in-memory fallback                            |
+| **SQL injection**                        | Data breach                        | Prisma parameterized queries; no raw SQL without review                                                                                               |
+| **Duplicate writes on retry**            | Duplicate memories or chat turns   | Optional `Idempotency-Key` replay on memory create and chat; deterministic BullMQ job IDs + `memory_index_states` hash guards                         |
+| **Stale vector leakage after delete**    | Deleted memory still searchable    | Delete job + scheduled reconciler with Postgres existence check; document brief consistency window                                                    |
+| **Secrets in repo**                      | Credential exposure                | `.env` gitignored; platform secret store in prod                                                                                                      |
+| **Insufficient audit trail**             | Compliance failure                 | Memory CRUD and auth/API-key lifecycle events are logged with correlation ID, action, entity, and safe payload metadata; audit writes are best-effort |
 
 ### 9.4 Auth Boundaries
 
 - JWT access tokens: short-lived, Bearer header.
 - API keys: `Authorization: Bearer smriti_...` or `X-API-Key` header.
+- Rate limits: per JWT user, per API-key ID, or per client IP for public requests. Invalid credentials are rejected before throttling.
 - Admin endpoints: `role === admin` guard.
 - Worker: no user-facing API; exposes only `GET /metrics` on `WORKER_METRICS_PORT` for internal scraping and connects only to internal services via env config.
 - Metrics: `/metrics` is unauthenticated on both processes. Expose it only on a private network or behind an ingress policy; it contains operational metadata, not memory content.
@@ -858,6 +865,7 @@ HTTP route labels use the Express route template, not the raw URL; unmatched req
 | Agent loop    | `pnpm eval` gate         | Harness policy, tools, injection, retry/resume                               |
 | Chat suite    | `pnpm eval` gate         | Remember, recall, dedup, general chat, conversation writes                   |
 | Idempotency   | Vitest + fake/Postgres   | Replay, payload mismatch, in-progress conflict, abort, expiry                |
+| Security      | Vitest + Supertest       | Per-user/per-key throttling, expensive-route policy, 429 shape, auth audit   |
 | Observability | Vitest + Supertest       | Metric rendering, bounded HTTP route labels, scrape exclusion                |
 | Live models   | `pnpm eval:live` (DMR)   | Local exploration only; never gates CI                                       |
 

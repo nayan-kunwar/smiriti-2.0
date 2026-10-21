@@ -958,7 +958,63 @@
         ]
       }
     },
-    "parameters": {}
+    "parameters": {},
+    "headers": {
+      "RetryAfter": {
+        "description": "Seconds until the default throttler allows the request again.",
+        "schema": {
+          "type": "integer",
+          "minimum": 1
+        }
+      },
+      "RetryAfterExpensive": {
+        "description": "Seconds until the expensive-route throttler allows the request again.",
+        "schema": {
+          "type": "integer",
+          "minimum": 1
+        }
+      },
+      "RateLimitLimit": {
+        "description": "Request limit for the default throttler.",
+        "schema": {
+          "type": "integer"
+        }
+      },
+      "RateLimitRemaining": {
+        "description": "Remaining requests in the default window.",
+        "schema": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "RateLimitReset": {
+        "description": "Seconds until the default window resets.",
+        "schema": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "ExpensiveRateLimitLimit": {
+        "description": "Request limit for the expensive-route throttler.",
+        "schema": {
+          "type": "integer"
+        }
+      },
+      "ExpensiveRateLimitRemaining": {
+        "description": "Remaining requests in the expensive-route window.",
+        "schema": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "ExpensiveRateLimitReset": {
+        "description": "Seconds until the expensive-route window resets.",
+        "schema": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    }
   },
   "paths": {
     "/health": {
@@ -987,6 +1043,35 @@
                     "status",
                     "timestamp"
                   ]
+                }
+              }
+            },
+            "headers": {
+              "X-RateLimit-Limit": {
+                "$ref": "#/components/headers/RateLimitLimit"
+              },
+              "X-RateLimit-Remaining": {
+                "$ref": "#/components/headers/RateLimitRemaining"
+              },
+              "X-RateLimit-Reset": {
+                "$ref": "#/components/headers/RateLimitReset"
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limit exceeded for the authenticated user, API key, or client IP. Expensive routes use the -expensive header suffix.",
+            "headers": {
+              "Retry-After": {
+                "$ref": "#/components/headers/RetryAfter"
+              },
+              "Retry-After-expensive": {
+                "$ref": "#/components/headers/RetryAfterExpensive"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
                 }
               }
             }
@@ -1038,6 +1123,35 @@
                   ]
                 }
               }
+            },
+            "headers": {
+              "X-RateLimit-Limit": {
+                "$ref": "#/components/headers/RateLimitLimit"
+              },
+              "X-RateLimit-Remaining": {
+                "$ref": "#/components/headers/RateLimitRemaining"
+              },
+              "X-RateLimit-Reset": {
+                "$ref": "#/components/headers/RateLimitReset"
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limit exceeded for the authenticated user, API key, or client IP. Expensive routes use the -expensive header suffix.",
+            "headers": {
+              "Retry-After": {
+                "$ref": "#/components/headers/RetryAfter"
+              },
+              "Retry-After-expensive": {
+                "$ref": "#/components/headers/RetryAfterExpensive"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
             }
           }
         }
@@ -1075,6 +1189,35 @@
                     "status",
                     "checks"
                   ]
+                }
+              }
+            },
+            "headers": {
+              "X-RateLimit-Limit": {
+                "$ref": "#/components/headers/RateLimitLimit"
+              },
+              "X-RateLimit-Remaining": {
+                "$ref": "#/components/headers/RateLimitRemaining"
+              },
+              "X-RateLimit-Reset": {
+                "$ref": "#/components/headers/RateLimitReset"
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limit exceeded for the authenticated user, API key, or client IP. Expensive routes use the -expensive header suffix.",
+            "headers": {
+              "Retry-After": {
+                "$ref": "#/components/headers/RetryAfter"
+              },
+              "Retry-After-expensive": {
+                "$ref": "#/components/headers/RetryAfterExpensive"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
                 }
               }
             }
@@ -1164,6 +1307,17 @@
                     "refreshToken"
                   ]
                 }
+              }
+            },
+            "headers": {
+              "X-RateLimit-Limit": {
+                "$ref": "#/components/headers/RateLimitLimit"
+              },
+              "X-RateLimit-Remaining": {
+                "$ref": "#/components/headers/RateLimitRemaining"
+              },
+              "X-RateLimit-Reset": {
+                "$ref": "#/components/headers/RateLimitReset"
               }
             }
           },
@@ -1258,6 +1412,24 @@
                 }
               }
             }
+          },
+          "429": {
+            "description": "Rate limit exceeded for the authenticated user, API key, or client IP. Expensive routes use the -expensive header suffix.",
+            "headers": {
+              "Retry-After": {
+                "$ref": "#/components/headers/RetryAfter"
+              },
+              "Retry-After-expensive": {
+                "$ref": "#/components/headers/RetryAfterExpensive"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           }
         }
       }
@@ -1343,6 +1515,17 @@
                   ]
                 }
               }
+            },
+            "headers": {
+              "X-RateLimit-Limit": {
+                "$ref": "#/components/headers/RateLimitLimit"
+              },
+              "X-RateLimit-Remaining": {
+                "$ref": "#/components/headers/RateLimitRemaining"
+              },
+              "X-RateLimit-Reset": {
+                "$ref": "#/components/headers/RateLimitReset"
+              }
             }
           },
           "401": {
@@ -1387,6 +1570,24 @@
                     "message",
                     "correlationId"
                   ]
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limit exceeded for the authenticated user, API key, or client IP. Expensive routes use the -expensive header suffix.",
+            "headers": {
+              "Retry-After": {
+                "$ref": "#/components/headers/RetryAfter"
+              },
+              "Retry-After-expensive": {
+                "$ref": "#/components/headers/RetryAfterExpensive"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
                 }
               }
             }
@@ -1470,6 +1671,17 @@
                   ]
                 }
               }
+            },
+            "headers": {
+              "X-RateLimit-Limit": {
+                "$ref": "#/components/headers/RateLimitLimit"
+              },
+              "X-RateLimit-Remaining": {
+                "$ref": "#/components/headers/RateLimitRemaining"
+              },
+              "X-RateLimit-Reset": {
+                "$ref": "#/components/headers/RateLimitReset"
+              }
             }
           },
           "401": {
@@ -1517,6 +1729,24 @@
                 }
               }
             }
+          },
+          "429": {
+            "description": "Rate limit exceeded for the authenticated user, API key, or client IP. Expensive routes use the -expensive header suffix.",
+            "headers": {
+              "Retry-After": {
+                "$ref": "#/components/headers/RetryAfter"
+              },
+              "Retry-After-expensive": {
+                "$ref": "#/components/headers/RetryAfterExpensive"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           }
         }
       }
@@ -1547,7 +1777,18 @@
         },
         "responses": {
           "204": {
-            "description": "Revoked"
+            "description": "Revoked",
+            "headers": {
+              "X-RateLimit-Limit": {
+                "$ref": "#/components/headers/RateLimitLimit"
+              },
+              "X-RateLimit-Remaining": {
+                "$ref": "#/components/headers/RateLimitRemaining"
+              },
+              "X-RateLimit-Reset": {
+                "$ref": "#/components/headers/RateLimitReset"
+              }
+            }
           },
           "401": {
             "description": "Unauthorized",
@@ -1591,6 +1832,24 @@
                     "message",
                     "correlationId"
                   ]
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limit exceeded for the authenticated user, API key, or client IP. Expensive routes use the -expensive header suffix.",
+            "headers": {
+              "Retry-After": {
+                "$ref": "#/components/headers/RetryAfter"
+              },
+              "Retry-After-expensive": {
+                "$ref": "#/components/headers/RetryAfterExpensive"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
                 }
               }
             }
@@ -1693,6 +1952,17 @@
                   ]
                 }
               }
+            },
+            "headers": {
+              "X-RateLimit-Limit": {
+                "$ref": "#/components/headers/RateLimitLimit"
+              },
+              "X-RateLimit-Remaining": {
+                "$ref": "#/components/headers/RateLimitRemaining"
+              },
+              "X-RateLimit-Reset": {
+                "$ref": "#/components/headers/RateLimitReset"
+              }
             }
           },
           "401": {
@@ -1740,6 +2010,24 @@
                 }
               }
             }
+          },
+          "429": {
+            "description": "Rate limit exceeded for the authenticated user, API key, or client IP. Expensive routes use the -expensive header suffix.",
+            "headers": {
+              "Retry-After": {
+                "$ref": "#/components/headers/RetryAfter"
+              },
+              "Retry-After-expensive": {
+                "$ref": "#/components/headers/RetryAfterExpensive"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           }
         }
       }
@@ -1771,7 +2059,18 @@
         ],
         "responses": {
           "204": {
-            "description": "Revoked"
+            "description": "Revoked",
+            "headers": {
+              "X-RateLimit-Limit": {
+                "$ref": "#/components/headers/RateLimitLimit"
+              },
+              "X-RateLimit-Remaining": {
+                "$ref": "#/components/headers/RateLimitRemaining"
+              },
+              "X-RateLimit-Reset": {
+                "$ref": "#/components/headers/RateLimitReset"
+              }
+            }
           },
           "401": {
             "description": "Unauthorized",
@@ -1861,6 +2160,24 @@
                     "message",
                     "correlationId"
                   ]
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limit exceeded for the authenticated user, API key, or client IP. Expensive routes use the -expensive header suffix.",
+            "headers": {
+              "Retry-After": {
+                "$ref": "#/components/headers/RetryAfter"
+              },
+              "Retry-After-expensive": {
+                "$ref": "#/components/headers/RetryAfterExpensive"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
                 }
               }
             }
@@ -1961,6 +2278,15 @@
           "201": {
             "description": "Created",
             "headers": {
+              "X-RateLimit-Limit": {
+                "$ref": "#/components/headers/RateLimitLimit"
+              },
+              "X-RateLimit-Remaining": {
+                "$ref": "#/components/headers/RateLimitRemaining"
+              },
+              "X-RateLimit-Reset": {
+                "$ref": "#/components/headers/RateLimitReset"
+              },
               "Idempotency-Replayed": {
                 "description": "Present and set to true when the stored response was replayed.",
                 "schema": {
@@ -2196,6 +2522,24 @@
                 }
               }
             }
+          },
+          "429": {
+            "description": "Rate limit exceeded for the authenticated user, API key, or client IP. Expensive routes use the -expensive header suffix.",
+            "headers": {
+              "Retry-After": {
+                "$ref": "#/components/headers/RetryAfter"
+              },
+              "Retry-After-expensive": {
+                "$ref": "#/components/headers/RetryAfterExpensive"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           }
         }
       },
@@ -2372,6 +2716,17 @@
                   ]
                 }
               }
+            },
+            "headers": {
+              "X-RateLimit-Limit": {
+                "$ref": "#/components/headers/RateLimitLimit"
+              },
+              "X-RateLimit-Remaining": {
+                "$ref": "#/components/headers/RateLimitRemaining"
+              },
+              "X-RateLimit-Reset": {
+                "$ref": "#/components/headers/RateLimitReset"
+              }
             }
           },
           "401": {
@@ -2416,6 +2771,24 @@
                     "message",
                     "correlationId"
                   ]
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limit exceeded for the authenticated user, API key, or client IP. Expensive routes use the -expensive header suffix.",
+            "headers": {
+              "Retry-After": {
+                "$ref": "#/components/headers/RetryAfter"
+              },
+              "Retry-After-expensive": {
+                "$ref": "#/components/headers/RetryAfterExpensive"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
                 }
               }
             }
@@ -2593,6 +2966,26 @@
                   ]
                 }
               }
+            },
+            "headers": {
+              "X-RateLimit-Limit": {
+                "$ref": "#/components/headers/RateLimitLimit"
+              },
+              "X-RateLimit-Remaining": {
+                "$ref": "#/components/headers/RateLimitRemaining"
+              },
+              "X-RateLimit-Reset": {
+                "$ref": "#/components/headers/RateLimitReset"
+              },
+              "X-RateLimit-Limit-expensive": {
+                "$ref": "#/components/headers/ExpensiveRateLimitLimit"
+              },
+              "X-RateLimit-Remaining-expensive": {
+                "$ref": "#/components/headers/ExpensiveRateLimitRemaining"
+              },
+              "X-RateLimit-Reset-expensive": {
+                "$ref": "#/components/headers/ExpensiveRateLimitReset"
+              }
             }
           },
           "400": {
@@ -2683,6 +3076,24 @@
                     "message",
                     "correlationId"
                   ]
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limit exceeded for the authenticated user, API key, or client IP. Expensive routes use the -expensive header suffix.",
+            "headers": {
+              "Retry-After": {
+                "$ref": "#/components/headers/RetryAfter"
+              },
+              "Retry-After-expensive": {
+                "$ref": "#/components/headers/RetryAfterExpensive"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
                 }
               }
             }
@@ -2804,6 +3215,17 @@
                   ]
                 }
               }
+            },
+            "headers": {
+              "X-RateLimit-Limit": {
+                "$ref": "#/components/headers/RateLimitLimit"
+              },
+              "X-RateLimit-Remaining": {
+                "$ref": "#/components/headers/RateLimitRemaining"
+              },
+              "X-RateLimit-Reset": {
+                "$ref": "#/components/headers/RateLimitReset"
+              }
             }
           },
           "401": {
@@ -2894,6 +3316,24 @@
                     "message",
                     "correlationId"
                   ]
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limit exceeded for the authenticated user, API key, or client IP. Expensive routes use the -expensive header suffix.",
+            "headers": {
+              "Retry-After": {
+                "$ref": "#/components/headers/RetryAfter"
+              },
+              "Retry-After-expensive": {
+                "$ref": "#/components/headers/RetryAfterExpensive"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
                 }
               }
             }
@@ -3070,6 +3510,17 @@
                   ]
                 }
               }
+            },
+            "headers": {
+              "X-RateLimit-Limit": {
+                "$ref": "#/components/headers/RateLimitLimit"
+              },
+              "X-RateLimit-Remaining": {
+                "$ref": "#/components/headers/RateLimitRemaining"
+              },
+              "X-RateLimit-Reset": {
+                "$ref": "#/components/headers/RateLimitReset"
+              }
             }
           },
           "400": {
@@ -3209,6 +3660,24 @@
                 }
               }
             }
+          },
+          "429": {
+            "description": "Rate limit exceeded for the authenticated user, API key, or client IP. Expensive routes use the -expensive header suffix.",
+            "headers": {
+              "Retry-After": {
+                "$ref": "#/components/headers/RetryAfter"
+              },
+              "Retry-After-expensive": {
+                "$ref": "#/components/headers/RetryAfterExpensive"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           }
         }
       },
@@ -3238,7 +3707,18 @@
         ],
         "responses": {
           "204": {
-            "description": "Deleted"
+            "description": "Deleted",
+            "headers": {
+              "X-RateLimit-Limit": {
+                "$ref": "#/components/headers/RateLimitLimit"
+              },
+              "X-RateLimit-Remaining": {
+                "$ref": "#/components/headers/RateLimitRemaining"
+              },
+              "X-RateLimit-Reset": {
+                "$ref": "#/components/headers/RateLimitReset"
+              }
+            }
           },
           "401": {
             "description": "Unauthorized",
@@ -3331,6 +3811,24 @@
                 }
               }
             }
+          },
+          "429": {
+            "description": "Rate limit exceeded for the authenticated user, API key, or client IP. Expensive routes use the -expensive header suffix.",
+            "headers": {
+              "Retry-After": {
+                "$ref": "#/components/headers/RetryAfter"
+              },
+              "Retry-After-expensive": {
+                "$ref": "#/components/headers/RetryAfterExpensive"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           }
         }
       }
@@ -3390,6 +3888,24 @@
           "200": {
             "description": "Assistant response and side-effect IDs",
             "headers": {
+              "X-RateLimit-Limit": {
+                "$ref": "#/components/headers/RateLimitLimit"
+              },
+              "X-RateLimit-Remaining": {
+                "$ref": "#/components/headers/RateLimitRemaining"
+              },
+              "X-RateLimit-Reset": {
+                "$ref": "#/components/headers/RateLimitReset"
+              },
+              "X-RateLimit-Limit-expensive": {
+                "$ref": "#/components/headers/ExpensiveRateLimitLimit"
+              },
+              "X-RateLimit-Remaining-expensive": {
+                "$ref": "#/components/headers/ExpensiveRateLimitRemaining"
+              },
+              "X-RateLimit-Reset-expensive": {
+                "$ref": "#/components/headers/ExpensiveRateLimitReset"
+              },
               "Idempotency-Replayed": {
                 "description": "Present and set to true when the stored response was replayed.",
                 "schema": {
@@ -3594,6 +4110,24 @@
                 }
               }
             }
+          },
+          "429": {
+            "description": "Rate limit exceeded for the authenticated user, API key, or client IP. Expensive routes use the -expensive header suffix.",
+            "headers": {
+              "Retry-After": {
+                "$ref": "#/components/headers/RetryAfter"
+              },
+              "Retry-After-expensive": {
+                "$ref": "#/components/headers/RetryAfterExpensive"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           }
         }
       }
@@ -3668,6 +4202,17 @@
                   ]
                 }
               }
+            },
+            "headers": {
+              "X-RateLimit-Limit": {
+                "$ref": "#/components/headers/RateLimitLimit"
+              },
+              "X-RateLimit-Remaining": {
+                "$ref": "#/components/headers/RateLimitRemaining"
+              },
+              "X-RateLimit-Reset": {
+                "$ref": "#/components/headers/RateLimitReset"
+              }
             }
           },
           "401": {
@@ -3712,6 +4257,24 @@
                     "message",
                     "correlationId"
                   ]
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limit exceeded for the authenticated user, API key, or client IP. Expensive routes use the -expensive header suffix.",
+            "headers": {
+              "Retry-After": {
+                "$ref": "#/components/headers/RetryAfter"
+              },
+              "Retry-After-expensive": {
+                "$ref": "#/components/headers/RetryAfterExpensive"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
                 }
               }
             }
@@ -3811,6 +4374,17 @@
                   ]
                 }
               }
+            },
+            "headers": {
+              "X-RateLimit-Limit": {
+                "$ref": "#/components/headers/RateLimitLimit"
+              },
+              "X-RateLimit-Remaining": {
+                "$ref": "#/components/headers/RateLimitRemaining"
+              },
+              "X-RateLimit-Reset": {
+                "$ref": "#/components/headers/RateLimitReset"
+              }
             }
           },
           "401": {
@@ -3901,6 +4475,24 @@
                     "message",
                     "correlationId"
                   ]
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limit exceeded for the authenticated user, API key, or client IP. Expensive routes use the -expensive header suffix.",
+            "headers": {
+              "Retry-After": {
+                "$ref": "#/components/headers/RetryAfter"
+              },
+              "Retry-After-expensive": {
+                "$ref": "#/components/headers/RetryAfterExpensive"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
                 }
               }
             }
@@ -4003,6 +4595,17 @@
                   ]
                 }
               }
+            },
+            "headers": {
+              "X-RateLimit-Limit": {
+                "$ref": "#/components/headers/RateLimitLimit"
+              },
+              "X-RateLimit-Remaining": {
+                "$ref": "#/components/headers/RateLimitRemaining"
+              },
+              "X-RateLimit-Reset": {
+                "$ref": "#/components/headers/RateLimitReset"
+              }
             }
           },
           "401": {
@@ -4093,6 +4696,24 @@
                     "message",
                     "correlationId"
                   ]
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limit exceeded for the authenticated user, API key, or client IP. Expensive routes use the -expensive header suffix.",
+            "headers": {
+              "Retry-After": {
+                "$ref": "#/components/headers/RetryAfter"
+              },
+              "Retry-After-expensive": {
+                "$ref": "#/components/headers/RetryAfterExpensive"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
                 }
               }
             }
@@ -4211,6 +4832,17 @@
                   ]
                 }
               }
+            },
+            "headers": {
+              "X-RateLimit-Limit": {
+                "$ref": "#/components/headers/RateLimitLimit"
+              },
+              "X-RateLimit-Remaining": {
+                "$ref": "#/components/headers/RateLimitRemaining"
+              },
+              "X-RateLimit-Reset": {
+                "$ref": "#/components/headers/RateLimitReset"
+              }
             }
           },
           "401": {
@@ -4301,6 +4933,24 @@
                     "message",
                     "correlationId"
                   ]
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limit exceeded for the authenticated user, API key, or client IP. Expensive routes use the -expensive header suffix.",
+            "headers": {
+              "Retry-After": {
+                "$ref": "#/components/headers/RetryAfter"
+              },
+              "Retry-After-expensive": {
+                "$ref": "#/components/headers/RetryAfterExpensive"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
                 }
               }
             }
