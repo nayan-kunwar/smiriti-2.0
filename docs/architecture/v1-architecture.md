@@ -1,9 +1,9 @@
 # Smriti v1 Architecture
 
-> **Status**: v1 implemented (memory CRUD, semantic search, async indexing, reconciliation, REST/chat dedup, request idempotency, per-principal rate limiting, auth/API-key audit events, Prometheus metrics, and LangGraph `/v1/chat`).
+> **Status**: v1 implemented (memory CRUD, semantic search, async indexing, reconciliation, durable terminal job failures with admin replay, REST/chat dedup, request idempotency, per-principal rate limiting, auth/API-key audit events, Prometheus metrics, and LangGraph `/v1/chat`).
 > **Scope**: Long-term + semantic memory, REST APIs, LangGraph `/chat`, embedding pipeline, auth, observability
-> **Not in v1**: object storage, DLQ, streaming chat/checkpointing.
-> **Last updated**: 2026-10-21
+> **Not in v1**: object storage, streaming chat/checkpointing, automated DLQ replay.
+> **Last updated**: 2026-10-24
 
 ---
 
@@ -19,7 +19,7 @@ Smriti is a production-grade agentic memory assistant. v1 delivers a REST API an
 | ------------------ | ---------------------------------------------------------------------- |
 | **End user**       | Registers, authenticates, manages memories via REST or chat            |
 | **API consumer**   | External service using JWT or API key to call memory APIs              |
-| **Admin**          | RBAC `admin` role; views users and audit logs                          |
+| **Admin**          | RBAC `admin` role; views users/audit logs and replays terminal jobs    |
 | **Worker process** | BullMQ consumer for embedding, vector indexing, reconciliation         |
 | **CI pipeline**    | GitHub Actions: format/lint/typecheck, tests, eval gate, Docker builds |
 
@@ -62,7 +62,7 @@ Embedding vectors are **provider-scoped**. A collection is never shared across p
 - **Local**: `pnpm docker:up` runs Postgres, Redis, Qdrant, Ollama, and MinIO. Docker Model Runner is host-native (Docker Desktop) at `http://localhost:12434/engines/v1`; containers reach it at `http://model-runner.docker.internal/engines/v1`.
 - **Production**: Two container types (API + worker) against managed Postgres, Redis, Qdrant, and a configured embedding/chat provider. No Kubernetes coupling; env-driven config only.
 - **Metrics**: Prometheus scrapes the API at `GET /metrics` (API port) and the worker at `GET /metrics` on `WORKER_METRICS_PORT` (default `9464`). Both are internal-network endpoints, not user-facing APIs.
-- **Consistency model**: Postgres is SoT. A durable `memory_index_states` row is authoritative for `indexingStatus`; Qdrant is eventually consistent (target SLA < 30s under normal load) and is repaired by a scheduled reconciler.
+- **Consistency model**: Postgres is SoT. A durable `memory_index_states` row is authoritative for `indexingStatus`; Qdrant is eventually consistent (target SLA < 30s under normal load) and is repaired by a scheduled reconciler. Terminal `embed-and-index`/`delete-vectors` failures are also persisted in Postgres (`job_failures`) so recovery does not depend on Redis retention.
 
 ---
 
@@ -99,7 +99,7 @@ The dedup check is intentionally not part of the durable write path: if embeddin
 2. Postgres row hard-deleted.
 3. Audit log (`memory.delete`) with content hash snapshot (not full PII).
 4. `delete-vectors` job enqueued with `jobId = memoryId`.
-5. Worker scrolls Qdrant by the `memoryId` payload field and deletes every matching chunk point, then deletes the `memory_embeddings` rows. If the job is lost, the reconciler deletes points whose memory no longer exists.
+5. Worker scrolls Qdrant by the `memoryId` payload field and deletes every matching chunk point, then deletes the `memory_embeddings` rows. If the job is lost, the reconciler deletes points whose memory no longer exists. If it exhausts its attempts, a durable `job_failures` row is written for admin replay.
 
 ### 2.4 Consistency Window
 
@@ -114,7 +114,13 @@ API responses include `indexingStatus` (`pending` | `indexed` | `failed` | `not_
 
 The reconciler scans Postgres in pages, compares state/hash, verifies that each `indexed` memory has exactly its expected Qdrant chunk points, force-re-enqueues inconsistent memories up to a cap, and deletes Qdrant points whose memory no longer exists. Deletion candidates are re-checked against Postgres to avoid racing a concurrent create.
 
-### 2.5 Chat Turn
+### 2.5 Terminal Job Failures
+
+When `embed-and-index` or `delete-vectors` exhausts `JOB_ATTEMPTS`, the worker writes a `job_failures` row containing the original job ID/name, payload, attempt count, error, and correlation ID, then increments `smriti_job_terminal_failures_total`. `embed-and-index` also marks `memory_index_states` failed.
+
+Admins list failures with `GET /v1/admin/job-failures` and replay one with `POST /v1/admin/job-failures/:id/retry`. A replay re-enqueues the original BullMQ job ID and payload with the configured retry settings, writes a `job.retry` audit event, and marks the row `retried`. Replays are limited to `embed-and-index` and `delete-vectors`; scheduler-only jobs are excluded. Failure rows are retained for `JOB_FAILURE_RETENTION_DAYS` and pruned by a scheduled worker job. There is no automatic DLQ consumer: recovery is operator-initiated.
+
+### 2.6 Chat Turn
 
 1. Client sends `POST /v1/chat` with `{ message, conversationId? }` and an optional `Idempotency-Key`.
 2. If a key is supplied, the API reserves or replays it before doing any conversation work.
@@ -322,6 +328,22 @@ erDiagram
     timestamp updated_at
     timestamp expires_at
   }
+
+  job_failures {
+    uuid id PK
+    string job_id
+    string job_name
+    string queue
+    jsonb payload
+    int attempts
+    text error
+    string correlation_id
+    enum status
+    timestamp retried_at
+    uuid retried_by
+    timestamp created_at
+    timestamp updated_at
+  }
 ```
 
 ### Indexes (v1)
@@ -338,6 +360,10 @@ erDiagram
 - `audit_logs (user_id, created_at DESC)`
 - `idempotency_keys (user_id)`
 - `idempotency_keys (expires_at)`
+- `job_failures (status, created_at DESC)`
+- `job_failures (job_name, created_at DESC)`
+- `job_failures (job_id)`
+- `job_failures (created_at)`
 
 The partial indexes for pinned/archived listings were designed but are **not yet in a migration**.
 
@@ -484,10 +510,14 @@ Search hits currently report `indexingStatus: "indexed"` because they come from 
 
 ### 5.4 Admin
 
-| Method | Path                   | Role  |
-| ------ | ---------------------- | ----- |
-| GET    | `/v1/admin/users`      | admin |
-| GET    | `/v1/admin/audit-logs` | admin |
+| Method | Path                               | Role  |
+| ------ | ---------------------------------- | ----- |
+| GET    | `/v1/admin/users`                  | admin |
+| GET    | `/v1/admin/audit-logs`             | admin |
+| GET    | `/v1/admin/job-failures`           | admin |
+| POST   | `/v1/admin/job-failures/:id/retry` | admin |
+
+`GET /v1/admin/job-failures` accepts `cursor`, `limit`, optional `status` (`open` | `retried`), and optional `jobName`. It returns newest-first durable terminal failures with their original payload, attempt count, error, and correlation ID. `POST /v1/admin/job-failures/:id/retry` returns `202`, re-enqueues the original job ID/payload, writes a `job.retry` audit event, and marks the failure `retried`. A second retry returns `409` with `reason: "JOB_FAILURE_ALREADY_RETRIED"`; scheduler-only jobs return `409` with `JOB_FAILURE_NOT_REPLAYABLE`.
 
 ### 5.5 Ops
 
@@ -611,7 +641,8 @@ All ports live in `packages/domain/src/ports/`. Adapters live in `infrastructure
 | `EmbeddingProvider`      | `embed(texts[])`, `model`, `dimension`, `maxInputTokens`                                                         | OpenAI-compatible (DMR, Ollama, OpenAI) |
 | `ChatModel`              | `complete(messages[], options?)`, `model`                                                                        | OpenAI-compatible (DMR, Ollama, OpenAI) |
 | `VectorStore`            | `upsert`, `deleteByMemoryId`, `deletePoints`, `listPointsByMemoryId`, `scanPoints`, `search`, `ensureCollection` | Qdrant, in-memory                       |
-| `JobQueue`               | `enqueue(name, data, { jobId, force })`                                                                          | BullMQ, in-memory                       |
+| `JobQueue`               | `enqueue(name, data, { jobId, force })`, `replay(name, data, jobId)`                                             | BullMQ, in-memory                       |
+| `JobFailureRepository`   | `record`, `findAll`, `findById`, `markRetried`, `deleteOlderThan`                                                | Prisma, in-memory                       |
 
 ### 7.2 Planned
 
@@ -656,6 +687,18 @@ interface VectorStore {
 // packages/domain/src/ports/job-queue.port.ts
 interface JobQueue {
   enqueue(name: string, data: unknown, opts?: EnqueueOptions): Promise<void>;
+  replay(name: string, data: unknown, jobId: string): Promise<void>;
+}
+
+// packages/domain/src/ports/job-failure-repository.port.ts
+interface JobFailureRepository {
+  record(entry: JobFailureEntry): Promise<JobFailureRecord>;
+  findAll(
+    query: ListJobFailuresQuery,
+  ): Promise<{ items: JobFailureRecord[]; nextCursor: string | null }>;
+  findById(id: string): Promise<JobFailureRecord | null>;
+  markRetried(id: string, retriedBy: string, retriedAt: Date): Promise<JobFailureRecord | null>;
+  deleteOlderThan(cutoff: Date): Promise<number>;
 }
 
 // packages/domain/src/ports/chat-model.port.ts
@@ -732,6 +775,12 @@ Validated at boot via Zod (`packages/shared/src/config.ts`). Application **fails
 | `IDEMPOTENCY_TTL_HOURS`                | no        | `24`                                        | Idempotency response cache TTL                                   |
 | `IDEMPOTENCY_LOCK_TIMEOUT_MS`          | no        | `30000`                                     | In-progress reservation stale lock                               |
 | `IDEMPOTENCY_CLEANUP_INTERVAL_MINUTES` | no        | `60`                                        | Expired-key cleanup scheduler interval                           |
+| `JOB_ATTEMPTS`                         | no        | `3`                                         | Attempts for `embed-and-index`/`delete-vectors`                  |
+| `JOB_BACKOFF_DELAY_MS`                 | no        | `1000`                                      | Exponential backoff base delay                                   |
+| `JOB_REMOVE_ON_COMPLETE`               | no        | `100`                                       | Completed BullMQ jobs retained in Redis                          |
+| `JOB_REMOVE_ON_FAIL`                   | no        | `500`                                       | Failed BullMQ jobs retained in Redis                             |
+| `JOB_FAILURE_RETENTION_DAYS`           | no        | `30`                                        | Durable `job_failures` retention                                 |
+| `JOB_FAILURE_CLEANUP_INTERVAL_MINUTES` | no        | `60`                                        | Failure-record cleanup scheduler interval                        |
 | `RECONCILE_ENABLED`                    | no        | `true`                                      | Register/remove the reconcile scheduler                          |
 | `RECONCILE_INTERVAL_MINUTES`           | no        | `15`                                        | Scheduler interval                                               |
 | `RECONCILE_BATCH_SIZE`                 | no        | `100`                                       | Postgres page size                                               |
@@ -767,17 +816,17 @@ Code defaults are `EMBEDDING_PROVIDER=ollama` and `LLM_PROVIDER=openai`; `.env.e
 
 ### 9.3 Threats and Mitigations
 
-| Threat                                   | Impact                             | Mitigation                                                                                                                                            |
-| ---------------------------------------- | ---------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Prompt injection** via stored memories | LLM executes attacker instructions | Delimited context blocks; system prompt treats retrieved data as untrusted; eval suite tests injection cases                                          |
-| **Cross-tenant data access**             | User A reads User B's memories     | All queries scoped by `user_id` from JWT/API key; repository enforces ownership                                                                       |
-| **API key leakage**                      | Full account access                | Keys stored hashed; shown once at creation; rotation via delete + reissue                                                                             |
-| **Rate abuse / DoS**                     | Service degradation                | Redis-backed limits keyed by JWT user, API-key ID, or client IP; named expensive limit for chat/search; in-memory fallback                            |
-| **SQL injection**                        | Data breach                        | Prisma parameterized queries; no raw SQL without review                                                                                               |
-| **Duplicate writes on retry**            | Duplicate memories or chat turns   | Optional `Idempotency-Key` replay on memory create and chat; deterministic BullMQ job IDs + `memory_index_states` hash guards                         |
-| **Stale vector leakage after delete**    | Deleted memory still searchable    | Delete job + scheduled reconciler with Postgres existence check; document brief consistency window                                                    |
-| **Secrets in repo**                      | Credential exposure                | `.env` gitignored; platform secret store in prod                                                                                                      |
-| **Insufficient audit trail**             | Compliance failure                 | Memory CRUD and auth/API-key lifecycle events are logged with correlation ID, action, entity, and safe payload metadata; audit writes are best-effort |
+| Threat                                   | Impact                             | Mitigation                                                                                                                                                                |
+| ---------------------------------------- | ---------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Prompt injection** via stored memories | LLM executes attacker instructions | Delimited context blocks; system prompt treats retrieved data as untrusted; eval suite tests injection cases                                                              |
+| **Cross-tenant data access**             | User A reads User B's memories     | All queries scoped by `user_id` from JWT/API key; repository enforces ownership                                                                                           |
+| **API key leakage**                      | Full account access                | Keys stored hashed; shown once at creation; rotation via delete + reissue                                                                                                 |
+| **Rate abuse / DoS**                     | Service degradation                | Redis-backed limits keyed by JWT user, API-key ID, or client IP; named expensive limit for chat/search; in-memory fallback                                                |
+| **SQL injection**                        | Data breach                        | Prisma parameterized queries; no raw SQL without review                                                                                                                   |
+| **Duplicate writes on retry**            | Duplicate memories or chat turns   | Optional `Idempotency-Key` replay on memory create and chat; deterministic BullMQ job IDs + `memory_index_states` hash guards                                             |
+| **Stale vector leakage after delete**    | Deleted memory still searchable    | Delete job + scheduled reconciler with Postgres existence check; document brief consistency window                                                                        |
+| **Secrets in repo**                      | Credential exposure                | `.env` gitignored; platform secret store in prod                                                                                                                          |
+| **Insufficient audit trail**             | Compliance failure                 | Memory CRUD, auth/API-key lifecycle events, and admin job replays are logged with correlation ID, action, entity, and safe payload metadata; audit writes are best-effort |
 
 ### 9.4 Auth Boundaries
 
@@ -816,14 +865,15 @@ smriti-2.0/
 
 ## 11. Background Jobs
 
-| Job                        | Trigger                           | Idempotency key                                | Retries                    |
-| -------------------------- | --------------------------------- | ---------------------------------------------- | -------------------------- |
-| `embed-and-index`          | memory create/update              | `jobId = {memoryId}_{contentHash}`             | 3 with exponential backoff |
-| `delete-vectors`           | memory delete                     | `jobId = memoryId`                             | 3 with exponential backoff |
-| `reconcile-vectors`        | BullMQ scheduler (default 15 min) | BullMQ scheduler ID `reconcile-vectors`        | 1                          |
-| `cleanup-idempotency-keys` | BullMQ scheduler (default 60 min) | BullMQ scheduler ID `cleanup-idempotency-keys` | 1                          |
+| Job                        | Trigger                           | Idempotency key                                | Retries                                 |
+| -------------------------- | --------------------------------- | ---------------------------------------------- | --------------------------------------- |
+| `embed-and-index`          | memory create/update              | `jobId = {memoryId}_{contentHash}`             | `JOB_ATTEMPTS` with exponential backoff |
+| `delete-vectors`           | memory delete                     | `jobId = memoryId`                             | `JOB_ATTEMPTS` with exponential backoff |
+| `reconcile-vectors`        | BullMQ scheduler (default 15 min) | BullMQ scheduler ID `reconcile-vectors`        | 1                                       |
+| `cleanup-idempotency-keys` | BullMQ scheduler (default 60 min) | BullMQ scheduler ID `cleanup-idempotency-keys` | 1                                       |
+| `cleanup-job-failures`     | BullMQ scheduler (default 60 min) | BullMQ scheduler ID `cleanup-job-failures`     | 1                                       |
 
-The reconciler runs in the worker. It can force re-enqueue a memory whose job ID is terminal (`completed` or `failed`); active/waiting/delayed jobs are left untouched. `embed-and-index`/`delete-vectors` failed jobs are retained in Redis (`removeOnFail: 500`) and logged with structured fields; the scheduler-created reconcile job uses BullMQ defaults. The cleanup scheduler deletes expired idempotency rows and logs the deleted count. There is no DLQ implementation in v1.
+The reconciler runs in the worker. It can force re-enqueue a memory whose job ID is terminal (`completed` or `failed`); active/waiting/delayed jobs are left untouched. `embed-and-index` and `delete-vectors` use the configured attempts/backoff and retain completed/failed BullMQ jobs according to `JOB_REMOVE_ON_COMPLETE`/`JOB_REMOVE_ON_FAIL`. When those jobs exhaust their attempts, the worker persists a durable `job_failures` row; admins can list and replay it, which writes a `job.retry` audit event. The failure cleanup scheduler deletes rows older than `JOB_FAILURE_RETENTION_DAYS`; the idempotency cleanup scheduler deletes expired idempotency rows. There is no automatic DLQ consumer in v1: replay is admin-initiated.
 
 ---
 
@@ -843,6 +893,8 @@ Pino emits structured JSON logs in the API and worker. The API correlation ID co
 | `smriti_http_request_duration_seconds` | histogram | `method`, `route`, `status` | API middleware                       |
 | `smriti_bullmq_jobs_total`             | counter   | `queue`, `job`, `status`    | Worker `completed` / `failed` events |
 | `smriti_bullmq_job_duration_seconds`   | histogram | `queue`, `job`, `status`    | Worker `completed` / `failed` events |
+| `smriti_job_terminal_failures_total`   | counter   | `queue`, `job`              | Worker terminal-failure persistence  |
+| `smriti_job_manual_retries_total`      | counter   | `queue`, `job`              | API admin replay                     |
 | `smriti_process_*`, `smriti_nodejs_*`  | mixed     | process/runtime             | `prom-client` default collectors     |
 
 HTTP route labels use the Express route template, not the raw URL; unmatched requests use `route="unmatched"`. This bounds label cardinality. The API skips recording `GET /metrics` itself, and the default collectors are disabled under `NODE_ENV=test`/Vitest to avoid prom-client's event-loop timer in tests. Histogram buckets cover 5 ms through 10 s.
@@ -855,19 +907,20 @@ HTTP route labels use the Express route template, not the raw URL; unmatched req
 
 ## 13. Testing Strategy
 
-| Layer         | Tool                     | Scope                                                                        |
-| ------------- | ------------------------ | ---------------------------------------------------------------------------- |
-| Domain        | Vitest + fakes           | Aggregate invariants, chunking, point IDs                                    |
-| Application   | Vitest + fake ports      | Use cases, chat graph (remember/recall/dedup), embedding/reconcile handlers  |
-| Repositories  | Vitest + in-memory fakes | Repository port behavior; no Prisma adapter integration suite yet            |
-| API           | Supertest + Postgres     | Auth, memory CRUD/search/dedup, chat/conversations; skipped without Postgres |
-| Jobs          | Vitest + fake ports      | Embed/index, stale-chunk pruning, reconcile handlers; no worker-process test |
-| Agent loop    | `pnpm eval` gate         | Harness policy, tools, injection, retry/resume                               |
-| Chat suite    | `pnpm eval` gate         | Remember, recall, dedup, general chat, conversation writes                   |
-| Idempotency   | Vitest + fake/Postgres   | Replay, payload mismatch, in-progress conflict, abort, expiry                |
-| Security      | Vitest + Supertest       | Per-user/per-key throttling, expensive-route policy, 429 shape, auth audit   |
-| Observability | Vitest + Supertest       | Metric rendering, bounded HTTP route labels, scrape exclusion                |
-| Live models   | `pnpm eval:live` (DMR)   | Local exploration only; never gates CI                                       |
+| Layer          | Tool                          | Scope                                                                           |
+| -------------- | ----------------------------- | ------------------------------------------------------------------------------- |
+| Domain         | Vitest + fakes                | Aggregate invariants, chunking, point IDs                                       |
+| Application    | Vitest + fake ports           | Use cases, chat graph (remember/recall/dedup), embedding/reconcile handlers     |
+| Repositories   | Vitest + in-memory fakes      | Repository port behavior; no Prisma adapter integration suite yet               |
+| API            | Supertest + Postgres          | Auth, memory CRUD/search/dedup, chat/conversations; skipped without Postgres    |
+| Jobs           | Vitest + fake ports           | Embed/index, stale-chunk pruning, reconcile handlers; no worker-process test    |
+| Job resilience | Vitest + Supertest + Postgres | Durable failure persistence, admin list/retry, audit, replay metrics, retention |
+| Agent loop     | `pnpm eval` gate              | Harness policy, tools, injection, retry/resume                                  |
+| Chat suite     | `pnpm eval` gate              | Remember, recall, dedup, general chat, conversation writes                      |
+| Idempotency    | Vitest + fake/Postgres        | Replay, payload mismatch, in-progress conflict, abort, expiry                   |
+| Security       | Vitest + Supertest            | Per-user/per-key throttling, expensive-route policy, 429 shape, auth audit      |
+| Observability  | Vitest + Supertest            | Metric rendering, bounded HTTP route labels, scrape exclusion                   |
+| Live models    | `pnpm eval:live` (DMR)        | Local exploration only; never gates CI                                          |
 
 `pnpm test` runs unit/application tests and the API e2e suite when Postgres is reachable. The memory/chat API specs replace embeddings, the job queue, and Qdrant with fakes; the chat spec also supplies a fake `ChatModel`. When Postgres is unavailable the suite is skipped. CI runs format check, lint, typecheck, migrations, tests, the deterministic eval gate, and Docker image builds, with Postgres and Redis service containers (no Qdrant).
 

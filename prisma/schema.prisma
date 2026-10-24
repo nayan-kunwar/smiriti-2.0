@@ -34,6 +34,11 @@ enum IdempotencyStatus {
   completed
 }
 
+enum JobFailureStatus {
+  open
+  retried
+}
+
 model User {
   id           String   @id @default(uuid()) @db.Uuid
   email        String   @unique
@@ -200,4 +205,26 @@ model IdempotencyKey {
   @@index([userId])
   @@index([expiresAt])
   @@map("idempotency_keys")
+}
+
+model JobFailure {
+  id            String           @id @default(uuid()) @db.Uuid
+  jobId         String           @map("job_id")
+  jobName       String           @map("job_name")
+  queue         String
+  payload       Json
+  attempts      Int
+  error         String           @db.Text
+  correlationId String           @map("correlation_id")
+  status        JobFailureStatus @default(open)
+  retriedAt     DateTime?        @map("retried_at")
+  retriedBy     String?          @map("retried_by") @db.Uuid
+  createdAt     DateTime         @default(now()) @map("created_at")
+  updatedAt     DateTime         @updatedAt @map("updated_at")
+
+  @@index([status, createdAt(sort: Desc)])
+  @@index([jobName, createdAt(sort: Desc)])
+  @@index([jobId])
+  @@index([createdAt])
+  @@map("job_failures")
 }

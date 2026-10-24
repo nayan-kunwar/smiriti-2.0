@@ -142,6 +142,22 @@ const AuditLogSchema = z.object({
   createdAt: z.string().datetime(),
 });
 
+const JobFailureSchema = z.object({
+  id: z.string().uuid(),
+  jobId: z.string(),
+  jobName: z.string(),
+  queue: z.string(),
+  payload: z.record(z.string(), z.unknown()),
+  attempts: z.number().int(),
+  error: z.string(),
+  correlationId: z.string(),
+  status: z.enum(['open', 'retried']),
+  retriedAt: z.string().datetime().nullable(),
+  retriedBy: z.string().uuid().nullable(),
+  createdAt: z.string().datetime(),
+  updatedAt: z.string().datetime(),
+});
+
 const CursorResponseSchema = <T extends z.ZodTypeAny>(item: T) =>
   z.object({ items: z.array(item), cursor: z.string().nullable() });
 
@@ -176,12 +192,14 @@ registry.register('Conversation', ConversationSchema);
 registry.register('ConversationMessage', ConversationMessageSchema);
 registry.register('ConversationMessagesResponse', ConversationMessagesResponseSchema);
 registry.register('AuditLog', AuditLogSchema);
+registry.register('JobFailure', JobFailureSchema);
 registry.register('ErrorResponse', ErrorResponseSchema);
 registry.register('HealthResponse', HealthSchema);
 registry.register('LiveResponse', LiveSchema);
 registry.register('ReadyResponse', ReadySchema);
 registry.register('UserListResponse', CursorResponseSchema(UserSchema));
 registry.register('AuditLogListResponse', CursorResponseSchema(AuditLogSchema));
+registry.register('JobFailureListResponse', CursorResponseSchema(JobFailureSchema));
 
 registry.registerComponent('securitySchemes', 'bearerAuth', {
   type: 'http',
@@ -516,6 +534,44 @@ registry.registerPath({
   },
 });
 
+registry.registerPath({
+  method: 'get',
+  path: '/v1/admin/job-failures',
+  tags: ['Admin'],
+  summary: 'List durable terminal job failures',
+  security: auth,
+  request: {
+    query: cursorQuery().extend({
+      status: z.enum(['open', 'retried']).optional(),
+      jobName: z.string().optional(),
+    }),
+  },
+  responses: {
+    200: json(CursorResponseSchema(JobFailureSchema), 'Terminal job failures, newest first'),
+    401: error('Unauthorized'),
+    403: error('Forbidden'),
+  },
+});
+
+registry.registerPath({
+  method: 'post',
+  path: '/v1/admin/job-failures/{id}/retry',
+  tags: ['Admin'],
+  summary: 'Replay a durable terminal job failure',
+  description:
+    'Re-enqueues embed-and-index or delete-vectors with its original job ID and payload, writes a job.retry audit event, and marks the failure retried.',
+  security: auth,
+  request: { params: z.object({ id: z.string().uuid() }) },
+  responses: {
+    202: json(JobFailureSchema, 'Job re-enqueued and failure marked retried'),
+    400: error('Malformed failure ID'),
+    401: error('Unauthorized'),
+    403: error('Forbidden'),
+    404: error('Job failure not found'),
+    409: error('Already retried or job is not replayable'),
+  },
+});
+
 const generator = new OpenApiGeneratorV3(registry.definitions);
 const document = generator.generateDocument({
   openapi: '3.0.3',
@@ -531,7 +587,7 @@ const document = generator.generateDocument({
     { name: 'API keys', description: 'Bearer API key lifecycle' },
     { name: 'Memories', description: 'Memory CRUD and semantic search' },
     { name: 'Chat', description: 'Synchronous LangGraph chat and conversations' },
-    { name: 'Admin', description: 'Admin-only user and audit log reads' },
+    { name: 'Admin', description: 'Admin-only user, audit log, and job failure recovery' },
     { name: 'Ops', description: 'Health, liveness, and readiness' },
   ],
 });

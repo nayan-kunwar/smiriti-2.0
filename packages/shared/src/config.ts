@@ -36,6 +36,12 @@ export const ConfigSchema = z
     IDEMPOTENCY_TTL_HOURS: z.coerce.number().int().positive().max(720).default(24),
     IDEMPOTENCY_LOCK_TIMEOUT_MS: z.coerce.number().int().positive().max(300_000).default(30_000),
     IDEMPOTENCY_CLEANUP_INTERVAL_MINUTES: z.coerce.number().int().positive().max(1_440).default(60),
+    JOB_ATTEMPTS: z.coerce.number().int().min(1).max(20).default(3),
+    JOB_BACKOFF_DELAY_MS: z.coerce.number().int().min(0).max(600_000).default(1_000),
+    JOB_REMOVE_ON_COMPLETE: z.coerce.number().int().min(0).max(100_000).default(100),
+    JOB_REMOVE_ON_FAIL: z.coerce.number().int().min(0).max(100_000).default(500),
+    JOB_FAILURE_RETENTION_DAYS: z.coerce.number().int().min(1).max(3_650).default(30),
+    JOB_FAILURE_CLEANUP_INTERVAL_MINUTES: z.coerce.number().int().positive().max(1_440).default(60),
     RECONCILE_ENABLED: z
       .enum(['true', 'false'])
       .default('true')

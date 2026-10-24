@@ -66,7 +66,7 @@ Reconciliation load is bounded by `RECONCILE_BATCH_SIZE` (Postgres page size) an
 
 - Return `indexingStatus` on list/get/create/update responses from `memory_index_states`; search hits report `indexed` because they are served from Qdrant.
 - Delete by the `memoryId` Qdrant payload field (handles chunked memories).
-- Retain failed jobs in Redis and log structured failures; no DLQ in v1.
+- Persist exhausted `embed-and-index`/`delete-vectors` attempts in Postgres (`job_failures`) for admin listing/replay, while retaining BullMQ failed jobs in Redis; no automatic DLQ consumer in v1.
 - Reconcile on a schedule and on demand; force-re-enqueue terminal jobs.
 
 ## Compliance

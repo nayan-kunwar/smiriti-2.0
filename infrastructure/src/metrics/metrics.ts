@@ -2,6 +2,7 @@ import { collectDefaultMetrics, Counter, Histogram, Registry } from 'prom-client
 
 const HTTP_LABELS = ['method', 'route', 'status'] as const;
 const JOB_LABELS = ['queue', 'job', 'status'] as const;
+const JOB_FAILURE_LABELS = ['queue', 'job'] as const;
 
 const LATENCY_BUCKETS = [0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10];
 
@@ -20,6 +21,8 @@ export class Metrics {
   private readonly httpDuration: Histogram<(typeof HTTP_LABELS)[number]>;
   private readonly jobs: Counter<(typeof JOB_LABELS)[number]>;
   private readonly jobDuration: Histogram<(typeof JOB_LABELS)[number]>;
+  private readonly terminalJobFailures: Counter<(typeof JOB_FAILURE_LABELS)[number]>;
+  private readonly manualJobRetries: Counter<(typeof JOB_FAILURE_LABELS)[number]>;
 
   constructor(options: MetricsOptions = {}) {
     this.registry.setDefaultLabels({ service: 'smriti' });
@@ -54,6 +57,18 @@ export class Metrics {
       buckets: LATENCY_BUCKETS,
       registers: [this.registry],
     });
+    this.terminalJobFailures = new Counter({
+      name: 'smriti_job_terminal_failures_total',
+      help: 'BullMQ jobs that exhausted their attempts and were persisted as durable failures.',
+      labelNames: JOB_FAILURE_LABELS,
+      registers: [this.registry],
+    });
+    this.manualJobRetries = new Counter({
+      name: 'smriti_job_manual_retries_total',
+      help: 'Durable job failures manually replayed by an admin.',
+      labelNames: JOB_FAILURE_LABELS,
+      registers: [this.registry],
+    });
   }
 
   get contentType(): string {
@@ -83,6 +98,14 @@ export class Metrics {
     const labels = { queue, job, status };
     this.jobs.inc(labels);
     this.jobDuration.observe(labels, durationSeconds);
+  }
+
+  observeTerminalJobFailure(queue: string, job: string): void {
+    this.terminalJobFailures.inc({ queue, job });
+  }
+
+  observeManualJobRetry(queue: string, job: string): void {
+    this.manualJobRetries.inc({ queue, job });
   }
 
   reset(): void {

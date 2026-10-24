@@ -10,7 +10,11 @@ import type {
   ConversationRecord,
   ConversationRepository,
   ConversationRole,
+  JobFailureEntry,
+  JobFailureRecord,
+  JobFailureRepository,
   ListAuditLogsQuery,
+  ListJobFailuresQuery,
   ListMemoriesQuery,
   ListUsersQuery,
   MemoryRepository,
@@ -312,6 +316,93 @@ export class InMemoryApiKeyRepository implements ApiKeyRepository {
     if (record) {
       this.store.set(id, { ...record, lastUsedAt: new Date() });
     }
+  }
+
+  clear(): void {
+    this.store.clear();
+  }
+}
+
+export class InMemoryJobFailureRepository implements JobFailureRepository {
+  private store = new Map<string, JobFailureRecord>();
+
+  async record(entry: JobFailureEntry): Promise<JobFailureRecord> {
+    const now = new Date();
+    const record: JobFailureRecord = {
+      ...entry,
+      payload: { ...entry.payload },
+      id: randomUUID(),
+      status: 'open',
+      retriedAt: null,
+      retriedBy: null,
+      createdAt: now,
+      updatedAt: now,
+    };
+    this.store.set(record.id, record);
+    return { ...record, payload: { ...record.payload } };
+  }
+
+  async findAll(
+    query: ListJobFailuresQuery,
+  ): Promise<{ items: JobFailureRecord[]; nextCursor: string | null }> {
+    let items = [...this.store.values()];
+    if (query.status) {
+      items = items.filter((entry) => entry.status === query.status);
+    }
+    if (query.jobName) {
+      items = items.filter((entry) => entry.jobName === query.jobName);
+    }
+
+    items.sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime() || b.id.localeCompare(a.id));
+
+    let startIndex = 0;
+    if (query.cursor) {
+      const cursorIndex = items.findIndex((entry) => entry.id === query.cursor);
+      startIndex = cursorIndex >= 0 ? cursorIndex + 1 : 0;
+    }
+
+    const page = items.slice(startIndex, startIndex + query.limit);
+    const nextCursor =
+      startIndex + query.limit < items.length ? (page[page.length - 1]?.id ?? null) : null;
+
+    return {
+      items: page.map((entry) => ({ ...entry, payload: { ...entry.payload } })),
+      nextCursor,
+    };
+  }
+
+  async findById(id: string): Promise<JobFailureRecord | null> {
+    const record = this.store.get(id);
+    return record ? { ...record, payload: { ...record.payload } } : null;
+  }
+
+  async markRetried(
+    id: string,
+    retriedBy: string,
+    retriedAt: Date,
+  ): Promise<JobFailureRecord | null> {
+    const record = this.store.get(id);
+    if (!record || record.status !== 'open') return null;
+    const updated: JobFailureRecord = {
+      ...record,
+      status: 'retried',
+      retriedAt,
+      retriedBy,
+      updatedAt: retriedAt,
+    };
+    this.store.set(id, updated);
+    return { ...updated, payload: { ...updated.payload } };
+  }
+
+  async deleteOlderThan(cutoff: Date): Promise<number> {
+    let deleted = 0;
+    for (const [id, record] of this.store) {
+      if (record.createdAt < cutoff) {
+        this.store.delete(id);
+        deleted += 1;
+      }
+    }
+    return deleted;
   }
 
   clear(): void {

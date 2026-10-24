@@ -72,6 +72,10 @@ class FakeQueue implements JobQueue {
       return;
     this.jobs.push({ name, data, opts });
   }
+
+  async replay(name: string, data: unknown, jobId: string): Promise<void> {
+    await this.enqueue(name, data, { jobId });
+  }
 }
 
 class FakeEmbed implements EmbeddingProvider {

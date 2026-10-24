@@ -9,6 +9,7 @@ export * from './ports/password-hasher.port.js';
 export * from './ports/embedding-provider.port.js';
 export * from './ports/vector-store.port.js';
 export * from './ports/job-queue.port.js';
+export * from './ports/job-failure-repository.port.js';
 export * from './ports/memory-embedding.port.js';
 export * from './ports/memory-index-state.port.js';
 export * from './ports/conversation-repository.port.js';

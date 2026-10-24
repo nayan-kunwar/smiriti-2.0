@@ -1,9 +1,10 @@
 import { createServer } from 'node:http';
 import pino from 'pino';
-import { Queue, Worker } from 'bullmq';
+import { Queue, Worker, type Job } from 'bullmq';
 import { loadConfig } from '@smriti/shared';
 import {
   CLEANUP_IDEMPOTENCY_KEYS_JOB,
+  CLEANUP_JOB_FAILURES_JOB,
   DELETE_VECTORS_JOB,
   EMBED_AND_INDEX_JOB,
   RECONCILE_VECTORS_JOB,
@@ -17,6 +18,7 @@ import {
   getPrismaClient,
   Metrics,
   PrismaIdempotencyStore,
+  PrismaJobFailureRepository,
   PrismaMemoryEmbeddingStore,
   PrismaMemoryIndexStateStore,
   PrismaMemoryRepository,
@@ -32,6 +34,15 @@ const RECONCILE_SCHEDULER_ID = 'reconcile-vectors';
 
 function errorMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function isFinalAttempt(job: Job): boolean {
+  const maxAttempts = job.opts.attempts ?? 1;
+  return job.attemptsMade + 1 >= maxAttempts;
 }
 
 async function main(): Promise<void> {
@@ -55,8 +66,45 @@ async function main(): Promise<void> {
   const embeddingStore = new PrismaMemoryEmbeddingStore(prisma);
   const indexStateStore = new PrismaMemoryIndexStateStore(prisma);
   const idempotencyStore = new PrismaIdempotencyStore(prisma);
-  const jobQueue = new BullMqJobQueue(config.REDIS_URL);
+  const jobFailureRepository = new PrismaJobFailureRepository(prisma);
+  const jobQueue = new BullMqJobQueue(config.REDIS_URL, {
+    attempts: config.JOB_ATTEMPTS,
+    backoffDelayMs: config.JOB_BACKOFF_DELAY_MS,
+    removeOnComplete: config.JOB_REMOVE_ON_COMPLETE,
+    removeOnFail: config.JOB_REMOVE_ON_FAIL,
+  });
   const schedulerQueue = new Queue(SMRITI_QUEUE_NAME, { connection });
+
+  async function recordTerminalFailure(job: Job, err: unknown): Promise<void> {
+    const payload = isRecord(job.data) ? job.data : {};
+    const correlationId =
+      typeof payload.correlationId === 'string' && payload.correlationId.length > 0
+        ? payload.correlationId
+        : (job.id ?? 'unknown');
+    const attempts = Math.min(job.attemptsMade + 1, job.opts.attempts ?? 1);
+
+    try {
+      await jobFailureRepository.record({
+        jobId: job.id ?? 'unknown',
+        jobName: job.name,
+        queue: SMRITI_QUEUE_NAME,
+        payload,
+        attempts,
+        error: errorMessage(err),
+        correlationId,
+      });
+      metrics.observeTerminalJobFailure(SMRITI_QUEUE_NAME, job.name);
+      logger.error(
+        { jobId: job.id, jobName: job.name, attempts, correlationId },
+        'Terminal job failure persisted',
+      );
+    } catch (recordErr) {
+      logger.error(
+        { jobId: job.id, jobName: job.name, err: recordErr },
+        'Failed to persist terminal job failure',
+      );
+    }
+  }
 
   const worker = new Worker(
     SMRITI_QUEUE_NAME,
@@ -80,8 +128,7 @@ async function main(): Promise<void> {
             payload,
           );
         } catch (err) {
-          const maxAttempts = job.opts.attempts ?? 1;
-          if (job.attemptsMade + 1 >= maxAttempts) {
+          if (isFinalAttempt(job)) {
             await indexStateStore
               .markFailed(payload.memoryId, payload.contentHash, errorMessage(err))
               .catch((stateErr) => {
@@ -90,6 +137,7 @@ async function main(): Promise<void> {
                   'Failed to record indexing failure',
                 );
               });
+            await recordTerminalFailure(job, err);
           }
           throw err;
         }
@@ -98,12 +146,34 @@ async function main(): Promise<void> {
       if (job.name === DELETE_VECTORS_JOB) {
         const payload = job.data as DeleteVectorsPayload;
         logger.info({ jobId: job.id, memoryId: payload.memoryId }, 'delete-vectors start');
-        await handleDeleteVectors({ vectorStore, embeddingStore }, payload);
+        try {
+          await handleDeleteVectors({ vectorStore, embeddingStore }, payload);
+        } catch (err) {
+          if (isFinalAttempt(job)) {
+            await recordTerminalFailure(job, err);
+          }
+          throw err;
+        }
         return;
       }
       if (job.name === CLEANUP_IDEMPOTENCY_KEYS_JOB) {
         const deleted = await idempotencyStore.deleteExpired(new Date());
         logger.info({ jobId: job.id, deleted }, 'cleanup-idempotency-keys complete');
+        return;
+      }
+      if (job.name === CLEANUP_JOB_FAILURES_JOB) {
+        const cutoff = new Date(
+          Date.now() - config.JOB_FAILURE_RETENTION_DAYS * 24 * 60 * 60 * 1_000,
+        );
+        const deleted = await jobFailureRepository.deleteOlderThan(cutoff);
+        logger.info(
+          {
+            jobId: job.id,
+            deleted,
+            retentionDays: config.JOB_FAILURE_RETENTION_DAYS,
+          },
+          'cleanup-job-failures complete',
+        );
         return;
       }
       if (job.name === RECONCILE_VECTORS_JOB) {
@@ -175,6 +245,19 @@ async function main(): Promise<void> {
   logger.info(
     { intervalMinutes: config.IDEMPOTENCY_CLEANUP_INTERVAL_MINUTES },
     'Idempotency cleanup scheduler registered',
+  );
+
+  await schedulerQueue.upsertJobScheduler(
+    'cleanup-job-failures',
+    { every: config.JOB_FAILURE_CLEANUP_INTERVAL_MINUTES * 60_000 },
+    { name: CLEANUP_JOB_FAILURES_JOB, data: {} },
+  );
+  logger.info(
+    {
+      intervalMinutes: config.JOB_FAILURE_CLEANUP_INTERVAL_MINUTES,
+      retentionDays: config.JOB_FAILURE_RETENTION_DAYS,
+    },
+    'Job failure cleanup scheduler registered',
   );
 
   const metricsServer = createServer(async (request, response) => {

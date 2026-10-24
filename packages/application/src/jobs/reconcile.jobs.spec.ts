@@ -136,6 +136,10 @@ class FakeQueue implements JobQueue {
   ): Promise<void> {
     this.jobs.push({ name, data, opts });
   }
+
+  async replay(name: string, data: unknown, jobId: string): Promise<void> {
+    await this.enqueue(name, data, { jobId, force: true });
+  }
 }
 
 class FakeVectors implements VectorStore {

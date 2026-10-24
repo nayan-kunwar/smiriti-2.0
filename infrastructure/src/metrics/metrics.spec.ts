@@ -37,4 +37,24 @@ describe('Metrics', () => {
     );
     expect(output).toContain('smriti_bullmq_job_duration_seconds_bucket');
   });
+
+  it('counts terminal failures and manual retries', async () => {
+    const metrics = new Metrics();
+
+    metrics.observeTerminalJobFailure('smriti-jobs', 'embed-and-index');
+    metrics.observeTerminalJobFailure('smriti-jobs', 'delete-vectors');
+    metrics.observeManualJobRetry('smriti-jobs', 'embed-and-index');
+
+    const output = await metrics.render();
+
+    expect(output).toMatch(
+      /smriti_job_terminal_failures_total\{[^}]*queue="smriti-jobs"[^}]*job="embed-and-index"[^}]*\} 1/,
+    );
+    expect(output).toMatch(
+      /smriti_job_terminal_failures_total\{[^}]*queue="smriti-jobs"[^}]*job="delete-vectors"[^}]*\} 1/,
+    );
+    expect(output).toMatch(
+      /smriti_job_manual_retries_total\{[^}]*queue="smriti-jobs"[^}]*job="embed-and-index"[^}]*\} 1/,
+    );
+  });
 });

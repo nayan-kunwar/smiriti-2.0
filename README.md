@@ -2,11 +2,12 @@
 
 Agentic memory assistant with a hexagonal memory pipeline: Postgres as the source of truth, asynchronous Qdrant indexing, BullMQ workers, and configurable embedding/chat providers.
 
-**Status:** v1 is implemented: memory CRUD, auth, per-principal rate limiting, auth/API-key audit events, semantic search, async indexing, reconciliation, REST/chat dedup, request idempotency for memory/chat writes, Prometheus metrics, and the synchronous LangGraph `/v1/chat` slice.
+**Status:** v1 is implemented: memory CRUD, auth, per-principal rate limiting, auth/API-key audit events, semantic search, async indexing, reconciliation, durable terminal job failures with admin replay, REST/chat dedup, request idempotency for memory/chat writes, Prometheus metrics, and the synchronous LangGraph `/v1/chat` slice.
 
 ## What works
 
 - Email/password registration and login, refresh-token rotation, API keys, per-principal rate limiting, and admin user/audit-log endpoints.
+- Durable terminal job-failure records for `embed-and-index` and `delete-vectors`, with admin listing, audited replay, and metrics.
 - Memory CRUD for `long_term` and `semantic` memories with tags, categories, pin/archive, and cursor pagination.
 - Semantic search over Qdrant with metadata filters.
 - Asynchronous chunking → embedding → Qdrant indexing, with durable `pending` / `indexed` / `failed` status.
@@ -194,6 +195,7 @@ Auth and API-key lifecycle events are written to `audit_logs`: `auth.register`, 
 - Jobs use `jobId = {memoryId}_{contentHash}`. A stale job skips when the memory hash changed.
 - After every successful re-index, Qdrant points outside the expected chunk set are deleted.
 - The worker registers a BullMQ job scheduler (`reconcile-vectors`) every 15 minutes by default. It repairs missing/stale/failed indexes and deletes orphan Qdrant points.
+- When `embed-and-index` or `delete-vectors` exhausts its attempts, the worker persists a durable `job_failures` row and increments `smriti_job_terminal_failures_total`.
 
 Relevant settings:
 
@@ -202,6 +204,37 @@ RECONCILE_ENABLED=true
 RECONCILE_INTERVAL_MINUTES=15
 RECONCILE_BATCH_SIZE=100
 RECONCILE_MAX_ENQUEUE=500
+
+JOB_ATTEMPTS=3
+JOB_BACKOFF_DELAY_MS=1000
+JOB_REMOVE_ON_COMPLETE=100
+JOB_REMOVE_ON_FAIL=500
+```
+
+## Job failures and recovery
+
+Admins can inspect and replay durable terminal failures:
+
+```bash
+# Open failures, optionally filtered by job name
+curl -H "Authorization: Bearer $ADMIN_TOKEN" \
+  "http://localhost:3000/v1/admin/job-failures?status=open&jobName=embed-and-index"
+
+# Replay one failure with its original job ID and payload
+curl -X POST -H "Authorization: Bearer $ADMIN_TOKEN" \
+  "http://localhost:3000/v1/admin/job-failures/<failure-id>/retry"
+```
+
+- Only `embed-and-index` and `delete-vectors` are replayable. Scheduler-only jobs (`reconcile-vectors`, idempotency cleanup, failure cleanup) are not.
+- A replay returns `202 Accepted`, re-enqueues the original BullMQ job ID, and marks the failure `retried`.
+- Each replay writes a `job.retry` audit event with the admin user and request correlation ID.
+- A second replay returns `409` with `reason: "JOB_FAILURE_ALREADY_RETRIED"`.
+- Failed job records are retained for `JOB_FAILURE_RETENTION_DAYS` (default 30) and pruned by the worker every `JOB_FAILURE_CLEANUP_INTERVAL_MINUTES` (default 60). Redis keeps `JOB_REMOVE_ON_FAIL` failed jobs (default 500).
+- Replaying a job whose memory was deleted is harmless: `embed-and-index` exits when the memory is gone, and `delete-vectors` is idempotent.
+
+```bash
+JOB_FAILURE_RETENTION_DAYS=30
+JOB_FAILURE_CLEANUP_INTERVAL_MINUTES=60
 ```
 
 ## Chat and duplicate detection
@@ -239,6 +272,8 @@ Metrics use bounded labels only. HTTP routes use the Express route template (`/v
 - `smriti_http_request_duration_seconds{method,route,status}`
 - `smriti_bullmq_jobs_total{queue,job,status}`
 - `smriti_bullmq_job_duration_seconds{queue,job,status}`
+- `smriti_job_terminal_failures_total{queue,job}`
+- `smriti_job_manual_retries_total{queue,job}`
 
 The default process/Node.js metrics are prefixed with `smriti_`. Metrics endpoints should be reachable only from the monitoring network; they have no application-level auth. The Prometheus scrape itself is excluded from the HTTP metrics.
 

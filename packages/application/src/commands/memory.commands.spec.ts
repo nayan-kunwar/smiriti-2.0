@@ -137,6 +137,10 @@ class FakeQueue implements JobQueue {
   async enqueue(name: string, data: unknown, opts?: { jobId?: string }): Promise<void> {
     this.jobs.push({ name, data, opts });
   }
+
+  async replay(name: string, data: unknown, jobId: string): Promise<void> {
+    await this.enqueue(name, data, { jobId });
+  }
 }
 
 describe('Memory use cases', () => {

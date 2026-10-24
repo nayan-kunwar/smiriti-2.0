@@ -23,6 +23,7 @@ export * from './persistence/prisma-idempotency.store.js';
 export * from './persistence/prisma-memory-embedding.store.js';
 export * from './persistence/prisma-memory-index-state.store.js';
 export * from './persistence/prisma-audit-log.repository.js';
+export * from './persistence/prisma-job-failure.repository.js';
 export * from './persistence/prisma-user.repository.js';
 export * from './persistence/prisma-refresh-token.repository.js';
 export * from './persistence/prisma-api-key.repository.js';

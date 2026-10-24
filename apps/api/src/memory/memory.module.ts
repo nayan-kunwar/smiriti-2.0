@@ -30,7 +30,13 @@ import type { EmbeddingProvider } from '@smriti/domain';
     },
     {
       provide: JOB_QUEUE,
-      useFactory: (config: AppConfig) => new BullMqJobQueue(config.REDIS_URL),
+      useFactory: (config: AppConfig) =>
+        new BullMqJobQueue(config.REDIS_URL, {
+          attempts: config.JOB_ATTEMPTS,
+          backoffDelayMs: config.JOB_BACKOFF_DELAY_MS,
+          removeOnComplete: config.JOB_REMOVE_ON_COMPLETE,
+          removeOnFail: config.JOB_REMOVE_ON_FAIL,
+        }),
       inject: [APP_CONFIG],
     },
   ],

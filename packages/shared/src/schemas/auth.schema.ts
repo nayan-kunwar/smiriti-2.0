@@ -30,9 +30,20 @@ export const ListAdminQuerySchema = z.object({
   userId: z.string().uuid().optional(),
 });
 
+export const JobFailureStatusSchema = z.enum(['open', 'retried']);
+
+export const ListJobFailuresQuerySchema = z.object({
+  cursor: z.string().optional(),
+  limit: z.coerce.number().int().min(1).max(100).default(20),
+  status: JobFailureStatusSchema.optional(),
+  jobName: z.string().min(1).max(128).optional(),
+});
+
 export type RegisterInput = z.infer<typeof RegisterSchema>;
 export type LoginInput = z.infer<typeof LoginSchema>;
 export type RefreshTokenInput = z.infer<typeof RefreshTokenSchema>;
 export type LogoutInput = z.infer<typeof LogoutSchema>;
 export type CreateApiKeyInput = z.infer<typeof CreateApiKeySchema>;
 export type ListAdminQueryInput = z.infer<typeof ListAdminQuerySchema>;
+export type JobFailureStatusInput = z.infer<typeof JobFailureStatusSchema>;
+export type ListJobFailuresQueryInput = z.infer<typeof ListJobFailuresQuerySchema>;
