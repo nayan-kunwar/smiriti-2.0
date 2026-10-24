@@ -546,6 +546,10 @@
       "ChatResponse": {
         "type": "object",
         "properties": {
+          "turnId": {
+            "type": "string",
+            "format": "uuid"
+          },
           "conversationId": {
             "type": "string",
             "format": "uuid"
@@ -588,11 +592,128 @@
           }
         },
         "required": [
+          "turnId",
           "conversationId",
           "message",
           "memoriesCreated",
           "memoriesRetrieved",
           "duplicateWarnings"
+        ]
+      },
+      "ChatTurn": {
+        "type": "object",
+        "properties": {
+          "turnId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "conversationId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "in_progress",
+              "completed",
+              "failed"
+            ]
+          },
+          "attempts": {
+            "type": "integer"
+          },
+          "error": {
+            "type": "object",
+            "nullable": true,
+            "properties": {
+              "code": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "code",
+              "message"
+            ]
+          },
+          "result": {
+            "type": "object",
+            "nullable": true,
+            "properties": {
+              "turnId": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "conversationId": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "message": {
+                "type": "string"
+              },
+              "memoriesCreated": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "format": "uuid"
+                }
+              },
+              "memoriesRetrieved": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "format": "uuid"
+                }
+              },
+              "duplicateWarnings": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "existingMemoryId": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "similarity": {
+                      "type": "number"
+                    }
+                  },
+                  "required": [
+                    "existingMemoryId",
+                    "similarity"
+                  ]
+                }
+              }
+            },
+            "required": [
+              "turnId",
+              "conversationId",
+              "message",
+              "memoriesCreated",
+              "memoriesRetrieved",
+              "duplicateWarnings"
+            ]
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "turnId",
+          "conversationId",
+          "status",
+          "attempts",
+          "error",
+          "result",
+          "createdAt",
+          "updatedAt"
         ]
       },
       "Conversation": {
@@ -848,6 +969,20 @@
           },
           "correlationId": {
             "type": "string"
+          },
+          "code": {
+            "type": "string"
+          },
+          "turnId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "conversationId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "retryable": {
+            "type": "boolean"
           },
           "reason": {
             "type": "string"
@@ -1502,6 +1637,20 @@
                     "correlationId": {
                       "type": "string"
                     },
+                    "code": {
+                      "type": "string"
+                    },
+                    "turnId": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "conversationId": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "retryable": {
+                      "type": "boolean"
+                    },
                     "reason": {
                       "type": "string"
                     },
@@ -1547,6 +1696,20 @@
                     },
                     "correlationId": {
                       "type": "string"
+                    },
+                    "code": {
+                      "type": "string"
+                    },
+                    "turnId": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "conversationId": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "retryable": {
+                      "type": "boolean"
                     },
                     "reason": {
                       "type": "string"
@@ -1709,6 +1872,20 @@
                     "correlationId": {
                       "type": "string"
                     },
+                    "code": {
+                      "type": "string"
+                    },
+                    "turnId": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "conversationId": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "retryable": {
+                      "type": "boolean"
+                    },
                     "reason": {
                       "type": "string"
                     },
@@ -1865,6 +2042,20 @@
                     "correlationId": {
                       "type": "string"
                     },
+                    "code": {
+                      "type": "string"
+                    },
+                    "turnId": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "conversationId": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "retryable": {
+                      "type": "boolean"
+                    },
                     "reason": {
                       "type": "string"
                     },
@@ -1970,6 +2161,20 @@
                     },
                     "correlationId": {
                       "type": "string"
+                    },
+                    "code": {
+                      "type": "string"
+                    },
+                    "turnId": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "conversationId": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "retryable": {
+                      "type": "boolean"
                     },
                     "reason": {
                       "type": "string"
@@ -2146,6 +2351,20 @@
                     "correlationId": {
                       "type": "string"
                     },
+                    "code": {
+                      "type": "string"
+                    },
+                    "turnId": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "conversationId": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "retryable": {
+                      "type": "boolean"
+                    },
                     "reason": {
                       "type": "string"
                     },
@@ -2253,6 +2472,20 @@
                     "correlationId": {
                       "type": "string"
                     },
+                    "code": {
+                      "type": "string"
+                    },
+                    "turnId": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "conversationId": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "retryable": {
+                      "type": "boolean"
+                    },
                     "reason": {
                       "type": "string"
                     },
@@ -2298,6 +2531,20 @@
                     },
                     "correlationId": {
                       "type": "string"
+                    },
+                    "code": {
+                      "type": "string"
+                    },
+                    "turnId": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "conversationId": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "retryable": {
+                      "type": "boolean"
                     },
                     "reason": {
                       "type": "string"
@@ -2566,6 +2813,20 @@
                     "correlationId": {
                       "type": "string"
                     },
+                    "code": {
+                      "type": "string"
+                    },
+                    "turnId": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "conversationId": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "retryable": {
+                      "type": "boolean"
+                    },
                     "reason": {
                       "type": "string"
                     },
@@ -2612,6 +2873,20 @@
                     "correlationId": {
                       "type": "string"
                     },
+                    "code": {
+                      "type": "string"
+                    },
+                    "turnId": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "conversationId": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "retryable": {
+                      "type": "boolean"
+                    },
                     "reason": {
                       "type": "string"
                     },
@@ -2657,6 +2932,20 @@
                     },
                     "correlationId": {
                       "type": "string"
+                    },
+                    "code": {
+                      "type": "string"
+                    },
+                    "turnId": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "conversationId": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "retryable": {
+                      "type": "boolean"
                     },
                     "reason": {
                       "type": "string"
@@ -2909,6 +3198,20 @@
                     },
                     "correlationId": {
                       "type": "string"
+                    },
+                    "code": {
+                      "type": "string"
+                    },
+                    "turnId": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "conversationId": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "retryable": {
+                      "type": "boolean"
                     },
                     "reason": {
                       "type": "string"
@@ -3169,6 +3472,20 @@
                     "correlationId": {
                       "type": "string"
                     },
+                    "code": {
+                      "type": "string"
+                    },
+                    "turnId": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "conversationId": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "retryable": {
+                      "type": "boolean"
+                    },
                     "reason": {
                       "type": "string"
                     },
@@ -3214,6 +3531,20 @@
                     },
                     "correlationId": {
                       "type": "string"
+                    },
+                    "code": {
+                      "type": "string"
+                    },
+                    "turnId": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "conversationId": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "retryable": {
+                      "type": "boolean"
                     },
                     "reason": {
                       "type": "string"
@@ -3409,6 +3740,20 @@
                     "correlationId": {
                       "type": "string"
                     },
+                    "code": {
+                      "type": "string"
+                    },
+                    "turnId": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "conversationId": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "retryable": {
+                      "type": "boolean"
+                    },
                     "reason": {
                       "type": "string"
                     },
@@ -3454,6 +3799,20 @@
                     },
                     "correlationId": {
                       "type": "string"
+                    },
+                    "code": {
+                      "type": "string"
+                    },
+                    "turnId": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "conversationId": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "retryable": {
+                      "type": "boolean"
                     },
                     "reason": {
                       "type": "string"
@@ -3704,6 +4063,20 @@
                     "correlationId": {
                       "type": "string"
                     },
+                    "code": {
+                      "type": "string"
+                    },
+                    "turnId": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "conversationId": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "retryable": {
+                      "type": "boolean"
+                    },
                     "reason": {
                       "type": "string"
                     },
@@ -3750,6 +4123,20 @@
                     "correlationId": {
                       "type": "string"
                     },
+                    "code": {
+                      "type": "string"
+                    },
+                    "turnId": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "conversationId": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "retryable": {
+                      "type": "boolean"
+                    },
                     "reason": {
                       "type": "string"
                     },
@@ -3795,6 +4182,20 @@
                     },
                     "correlationId": {
                       "type": "string"
+                    },
+                    "code": {
+                      "type": "string"
+                    },
+                    "turnId": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "conversationId": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "retryable": {
+                      "type": "boolean"
                     },
                     "reason": {
                       "type": "string"
@@ -3901,6 +4302,20 @@
                     "correlationId": {
                       "type": "string"
                     },
+                    "code": {
+                      "type": "string"
+                    },
+                    "turnId": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "conversationId": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "retryable": {
+                      "type": "boolean"
+                    },
                     "reason": {
                       "type": "string"
                     },
@@ -3946,6 +4361,20 @@
                     },
                     "correlationId": {
                       "type": "string"
+                    },
+                    "code": {
+                      "type": "string"
+                    },
+                    "turnId": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "conversationId": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "retryable": {
+                      "type": "boolean"
                     },
                     "reason": {
                       "type": "string"
@@ -4083,6 +4512,10 @@
                 "schema": {
                   "type": "object",
                   "properties": {
+                    "turnId": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
                     "conversationId": {
                       "type": "string",
                       "format": "uuid"
@@ -4125,6 +4558,7 @@
                     }
                   },
                   "required": [
+                    "turnId",
                     "conversationId",
                     "message",
                     "memoriesCreated",
@@ -4153,6 +4587,20 @@
                     },
                     "correlationId": {
                       "type": "string"
+                    },
+                    "code": {
+                      "type": "string"
+                    },
+                    "turnId": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "conversationId": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "retryable": {
+                      "type": "boolean"
                     },
                     "reason": {
                       "type": "string"
@@ -4200,6 +4648,20 @@
                     "correlationId": {
                       "type": "string"
                     },
+                    "code": {
+                      "type": "string"
+                    },
+                    "turnId": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "conversationId": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "retryable": {
+                      "type": "boolean"
+                    },
                     "reason": {
                       "type": "string"
                     },
@@ -4228,7 +4690,7 @@
             }
           },
           "409": {
-            "description": "Idempotency conflict. Reasons: IDEMPOTENCY_KEY_REUSE or IDEMPOTENCY_IN_PROGRESS.",
+            "description": "Idempotency or turn conflict. Codes: IDEMPOTENCY_KEY_REUSE, IDEMPOTENCY_IN_PROGRESS, CHAT_TURN_IN_PROGRESS, CHAT_TURN_KEY_REUSE, CHAT_TURN_RETRY_EXHAUSTED.",
             "content": {
               "application/json": {
                 "schema": {
@@ -4245,6 +4707,865 @@
                     },
                     "correlationId": {
                       "type": "string"
+                    },
+                    "code": {
+                      "type": "string"
+                    },
+                    "turnId": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "conversationId": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "retryable": {
+                      "type": "boolean"
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "retryAfterSeconds": {
+                      "type": "integer"
+                    },
+                    "existingMemoryId": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "similarity": {
+                      "type": "number"
+                    },
+                    "details": {
+                      "nullable": true
+                    }
+                  },
+                  "required": [
+                    "statusCode",
+                    "error",
+                    "message",
+                    "correlationId"
+                  ]
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limit exceeded for the authenticated user, API key, or client IP. Expensive routes use the -expensive header suffix.",
+            "headers": {
+              "Retry-After": {
+                "$ref": "#/components/headers/RetryAfter"
+              },
+              "Retry-After-expensive": {
+                "$ref": "#/components/headers/RetryAfterExpensive"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "The turn failed after its user message was persisted. The body carries code CHAT_TURN_FAILED and the turnId for retry.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "statusCode": {
+                      "type": "integer"
+                    },
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "correlationId": {
+                      "type": "string"
+                    },
+                    "code": {
+                      "type": "string"
+                    },
+                    "turnId": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "conversationId": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "retryable": {
+                      "type": "boolean"
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "retryAfterSeconds": {
+                      "type": "integer"
+                    },
+                    "existingMemoryId": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "similarity": {
+                      "type": "number"
+                    },
+                    "details": {
+                      "nullable": true
+                    }
+                  },
+                  "required": [
+                    "statusCode",
+                    "error",
+                    "message",
+                    "correlationId"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/chat/turns/{turnId}/retry": {
+      "post": {
+        "tags": [
+          "Chat"
+        ],
+        "summary": "Retry a failed or stale chat turn",
+        "description": "Reclaims a failed turn (or one whose execution lock expired) and re-runs the graph. The user message is reused, memories already written by the turn are skipped by content hash, and the assistant message is appended once. A completed turn replays its stored result.",
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "apiKeyAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "turnId",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Turn completed or replayed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "turnId": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "conversationId": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "memoriesCreated": {
+                      "type": "array",
+                      "items": {
+                        "type": "string",
+                        "format": "uuid"
+                      }
+                    },
+                    "memoriesRetrieved": {
+                      "type": "array",
+                      "items": {
+                        "type": "string",
+                        "format": "uuid"
+                      }
+                    },
+                    "duplicateWarnings": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "existingMemoryId": {
+                            "type": "string",
+                            "format": "uuid"
+                          },
+                          "similarity": {
+                            "type": "number"
+                          }
+                        },
+                        "required": [
+                          "existingMemoryId",
+                          "similarity"
+                        ]
+                      }
+                    }
+                  },
+                  "required": [
+                    "turnId",
+                    "conversationId",
+                    "message",
+                    "memoriesCreated",
+                    "memoriesRetrieved",
+                    "duplicateWarnings"
+                  ]
+                }
+              }
+            },
+            "headers": {
+              "X-RateLimit-Limit": {
+                "$ref": "#/components/headers/RateLimitLimit"
+              },
+              "X-RateLimit-Remaining": {
+                "$ref": "#/components/headers/RateLimitRemaining"
+              },
+              "X-RateLimit-Reset": {
+                "$ref": "#/components/headers/RateLimitReset"
+              }
+            }
+          },
+          "400": {
+            "description": "Malformed turn ID",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "statusCode": {
+                      "type": "integer"
+                    },
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "correlationId": {
+                      "type": "string"
+                    },
+                    "code": {
+                      "type": "string"
+                    },
+                    "turnId": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "conversationId": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "retryable": {
+                      "type": "boolean"
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "retryAfterSeconds": {
+                      "type": "integer"
+                    },
+                    "existingMemoryId": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "similarity": {
+                      "type": "number"
+                    },
+                    "details": {
+                      "nullable": true
+                    }
+                  },
+                  "required": [
+                    "statusCode",
+                    "error",
+                    "message",
+                    "correlationId"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "statusCode": {
+                      "type": "integer"
+                    },
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "correlationId": {
+                      "type": "string"
+                    },
+                    "code": {
+                      "type": "string"
+                    },
+                    "turnId": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "conversationId": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "retryable": {
+                      "type": "boolean"
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "retryAfterSeconds": {
+                      "type": "integer"
+                    },
+                    "existingMemoryId": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "similarity": {
+                      "type": "number"
+                    },
+                    "details": {
+                      "nullable": true
+                    }
+                  },
+                  "required": [
+                    "statusCode",
+                    "error",
+                    "message",
+                    "correlationId"
+                  ]
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Chat turn not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "statusCode": {
+                      "type": "integer"
+                    },
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "correlationId": {
+                      "type": "string"
+                    },
+                    "code": {
+                      "type": "string"
+                    },
+                    "turnId": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "conversationId": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "retryable": {
+                      "type": "boolean"
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "retryAfterSeconds": {
+                      "type": "integer"
+                    },
+                    "existingMemoryId": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "similarity": {
+                      "type": "number"
+                    },
+                    "details": {
+                      "nullable": true
+                    }
+                  },
+                  "required": [
+                    "statusCode",
+                    "error",
+                    "message",
+                    "correlationId"
+                  ]
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Turn is still in progress (CHAT_TURN_IN_PROGRESS) or has reached its retry limit (CHAT_TURN_RETRY_EXHAUSTED).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "statusCode": {
+                      "type": "integer"
+                    },
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "correlationId": {
+                      "type": "string"
+                    },
+                    "code": {
+                      "type": "string"
+                    },
+                    "turnId": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "conversationId": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "retryable": {
+                      "type": "boolean"
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "retryAfterSeconds": {
+                      "type": "integer"
+                    },
+                    "existingMemoryId": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "similarity": {
+                      "type": "number"
+                    },
+                    "details": {
+                      "nullable": true
+                    }
+                  },
+                  "required": [
+                    "statusCode",
+                    "error",
+                    "message",
+                    "correlationId"
+                  ]
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limit exceeded for the authenticated user, API key, or client IP. Expensive routes use the -expensive header suffix.",
+            "headers": {
+              "Retry-After": {
+                "$ref": "#/components/headers/RetryAfter"
+              },
+              "Retry-After-expensive": {
+                "$ref": "#/components/headers/RetryAfterExpensive"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "The retried turn failed again. Body carries code CHAT_TURN_FAILED and the turnId.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "statusCode": {
+                      "type": "integer"
+                    },
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "correlationId": {
+                      "type": "string"
+                    },
+                    "code": {
+                      "type": "string"
+                    },
+                    "turnId": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "conversationId": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "retryable": {
+                      "type": "boolean"
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "retryAfterSeconds": {
+                      "type": "integer"
+                    },
+                    "existingMemoryId": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "similarity": {
+                      "type": "number"
+                    },
+                    "details": {
+                      "nullable": true
+                    }
+                  },
+                  "required": [
+                    "statusCode",
+                    "error",
+                    "message",
+                    "correlationId"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/chat/turns/{turnId}": {
+      "get": {
+        "tags": [
+          "Chat"
+        ],
+        "summary": "Get a chat turn status",
+        "description": "Returns the durable turn state, attempt count, sanitized error, and the stored result for completed turns.",
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "apiKeyAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "turnId",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Turn status",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "turnId": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "conversationId": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "status": {
+                      "type": "string",
+                      "enum": [
+                        "in_progress",
+                        "completed",
+                        "failed"
+                      ]
+                    },
+                    "attempts": {
+                      "type": "integer"
+                    },
+                    "error": {
+                      "type": "object",
+                      "nullable": true,
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message"
+                      ]
+                    },
+                    "result": {
+                      "type": "object",
+                      "nullable": true,
+                      "properties": {
+                        "turnId": {
+                          "type": "string",
+                          "format": "uuid"
+                        },
+                        "conversationId": {
+                          "type": "string",
+                          "format": "uuid"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "memoriesCreated": {
+                          "type": "array",
+                          "items": {
+                            "type": "string",
+                            "format": "uuid"
+                          }
+                        },
+                        "memoriesRetrieved": {
+                          "type": "array",
+                          "items": {
+                            "type": "string",
+                            "format": "uuid"
+                          }
+                        },
+                        "duplicateWarnings": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "existingMemoryId": {
+                                "type": "string",
+                                "format": "uuid"
+                              },
+                              "similarity": {
+                                "type": "number"
+                              }
+                            },
+                            "required": [
+                              "existingMemoryId",
+                              "similarity"
+                            ]
+                          }
+                        }
+                      },
+                      "required": [
+                        "turnId",
+                        "conversationId",
+                        "message",
+                        "memoriesCreated",
+                        "memoriesRetrieved",
+                        "duplicateWarnings"
+                      ]
+                    },
+                    "createdAt": {
+                      "type": "string",
+                      "format": "date-time"
+                    },
+                    "updatedAt": {
+                      "type": "string",
+                      "format": "date-time"
+                    }
+                  },
+                  "required": [
+                    "turnId",
+                    "conversationId",
+                    "status",
+                    "attempts",
+                    "error",
+                    "result",
+                    "createdAt",
+                    "updatedAt"
+                  ]
+                }
+              }
+            },
+            "headers": {
+              "X-RateLimit-Limit": {
+                "$ref": "#/components/headers/RateLimitLimit"
+              },
+              "X-RateLimit-Remaining": {
+                "$ref": "#/components/headers/RateLimitRemaining"
+              },
+              "X-RateLimit-Reset": {
+                "$ref": "#/components/headers/RateLimitReset"
+              }
+            }
+          },
+          "400": {
+            "description": "Malformed turn ID",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "statusCode": {
+                      "type": "integer"
+                    },
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "correlationId": {
+                      "type": "string"
+                    },
+                    "code": {
+                      "type": "string"
+                    },
+                    "turnId": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "conversationId": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "retryable": {
+                      "type": "boolean"
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "retryAfterSeconds": {
+                      "type": "integer"
+                    },
+                    "existingMemoryId": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "similarity": {
+                      "type": "number"
+                    },
+                    "details": {
+                      "nullable": true
+                    }
+                  },
+                  "required": [
+                    "statusCode",
+                    "error",
+                    "message",
+                    "correlationId"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "statusCode": {
+                      "type": "integer"
+                    },
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "correlationId": {
+                      "type": "string"
+                    },
+                    "code": {
+                      "type": "string"
+                    },
+                    "turnId": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "conversationId": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "retryable": {
+                      "type": "boolean"
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "retryAfterSeconds": {
+                      "type": "integer"
+                    },
+                    "existingMemoryId": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "similarity": {
+                      "type": "number"
+                    },
+                    "details": {
+                      "nullable": true
+                    }
+                  },
+                  "required": [
+                    "statusCode",
+                    "error",
+                    "message",
+                    "correlationId"
+                  ]
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Chat turn not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "statusCode": {
+                      "type": "integer"
+                    },
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "correlationId": {
+                      "type": "string"
+                    },
+                    "code": {
+                      "type": "string"
+                    },
+                    "turnId": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "conversationId": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "retryable": {
+                      "type": "boolean"
                     },
                     "reason": {
                       "type": "string"
@@ -4395,6 +5716,20 @@
                     },
                     "correlationId": {
                       "type": "string"
+                    },
+                    "code": {
+                      "type": "string"
+                    },
+                    "turnId": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "conversationId": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "retryable": {
+                      "type": "boolean"
                     },
                     "reason": {
                       "type": "string"
@@ -4568,6 +5903,20 @@
                     "correlationId": {
                       "type": "string"
                     },
+                    "code": {
+                      "type": "string"
+                    },
+                    "turnId": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "conversationId": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "retryable": {
+                      "type": "boolean"
+                    },
                     "reason": {
                       "type": "string"
                     },
@@ -4613,6 +5962,20 @@
                     },
                     "correlationId": {
                       "type": "string"
+                    },
+                    "code": {
+                      "type": "string"
+                    },
+                    "turnId": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "conversationId": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "retryable": {
+                      "type": "boolean"
                     },
                     "reason": {
                       "type": "string"
@@ -4789,6 +6152,20 @@
                     "correlationId": {
                       "type": "string"
                     },
+                    "code": {
+                      "type": "string"
+                    },
+                    "turnId": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "conversationId": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "retryable": {
+                      "type": "boolean"
+                    },
                     "reason": {
                       "type": "string"
                     },
@@ -4834,6 +6211,20 @@
                     },
                     "correlationId": {
                       "type": "string"
+                    },
+                    "code": {
+                      "type": "string"
+                    },
+                    "turnId": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "conversationId": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "retryable": {
+                      "type": "boolean"
                     },
                     "reason": {
                       "type": "string"
@@ -5026,6 +6417,20 @@
                     "correlationId": {
                       "type": "string"
                     },
+                    "code": {
+                      "type": "string"
+                    },
+                    "turnId": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "conversationId": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "retryable": {
+                      "type": "boolean"
+                    },
                     "reason": {
                       "type": "string"
                     },
@@ -5071,6 +6476,20 @@
                     },
                     "correlationId": {
                       "type": "string"
+                    },
+                    "code": {
+                      "type": "string"
+                    },
+                    "turnId": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "conversationId": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "retryable": {
+                      "type": "boolean"
                     },
                     "reason": {
                       "type": "string"
@@ -5301,6 +6720,20 @@
                     "correlationId": {
                       "type": "string"
                     },
+                    "code": {
+                      "type": "string"
+                    },
+                    "turnId": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "conversationId": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "retryable": {
+                      "type": "boolean"
+                    },
                     "reason": {
                       "type": "string"
                     },
@@ -5346,6 +6779,20 @@
                     },
                     "correlationId": {
                       "type": "string"
+                    },
+                    "code": {
+                      "type": "string"
+                    },
+                    "turnId": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "conversationId": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "retryable": {
+                      "type": "boolean"
                     },
                     "reason": {
                       "type": "string"
@@ -5532,6 +6979,20 @@
                     "correlationId": {
                       "type": "string"
                     },
+                    "code": {
+                      "type": "string"
+                    },
+                    "turnId": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "conversationId": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "retryable": {
+                      "type": "boolean"
+                    },
                     "reason": {
                       "type": "string"
                     },
@@ -5577,6 +7038,20 @@
                     },
                     "correlationId": {
                       "type": "string"
+                    },
+                    "code": {
+                      "type": "string"
+                    },
+                    "turnId": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "conversationId": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "retryable": {
+                      "type": "boolean"
                     },
                     "reason": {
                       "type": "string"
@@ -5624,6 +7099,20 @@
                     "correlationId": {
                       "type": "string"
                     },
+                    "code": {
+                      "type": "string"
+                    },
+                    "turnId": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "conversationId": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "retryable": {
+                      "type": "boolean"
+                    },
                     "reason": {
                       "type": "string"
                     },
@@ -5670,6 +7159,20 @@
                     "correlationId": {
                       "type": "string"
                     },
+                    "code": {
+                      "type": "string"
+                    },
+                    "turnId": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "conversationId": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "retryable": {
+                      "type": "boolean"
+                    },
                     "reason": {
                       "type": "string"
                     },
@@ -5715,6 +7218,20 @@
                     },
                     "correlationId": {
                       "type": "string"
+                    },
+                    "code": {
+                      "type": "string"
+                    },
+                    "turnId": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "conversationId": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "retryable": {
+                      "type": "boolean"
                     },
                     "reason": {
                       "type": "string"

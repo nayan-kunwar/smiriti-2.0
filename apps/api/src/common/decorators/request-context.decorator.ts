@@ -44,3 +44,16 @@ export const CorrelationId = createParamDecorator(
     );
   },
 );
+
+/**
+ * Reads the optional `Idempotency-Key` header. The interceptor has already
+ * validated its length when the route uses `IdempotencyInterceptor`.
+ */
+export const IdempotencyKey = createParamDecorator(
+  (_data: unknown, ctx: ExecutionContext): string | undefined => {
+    const request = ctx.switchToHttp().getRequest<RequestWithUser>();
+    const raw = request.headers['idempotency-key'];
+    const value = Array.isArray(raw) ? raw[0] : raw;
+    return typeof value === 'string' && value.trim().length > 0 ? value.trim() : undefined;
+  },
+);

@@ -13,6 +13,7 @@ export * from './ports/job-failure-repository.port.js';
 export * from './ports/memory-embedding.port.js';
 export * from './ports/memory-index-state.port.js';
 export * from './ports/conversation-repository.port.js';
+export * from './ports/chat-turn-repository.port.js';
 export * from './ports/chat-model.port.js';
 export * from './ports/idempotency-store.port.js';
 export * from './utils/token-hash.js';

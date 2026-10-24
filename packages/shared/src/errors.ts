@@ -38,3 +38,17 @@ export class UnauthorizedError extends DomainError {
     this.name = 'UnauthorizedError';
   }
 }
+
+/**
+ * The turn was durably marked failed. The client can inspect it with
+ * `GET /v1/chat/turns/:id` or retry it with `POST /v1/chat/turns/:id/retry`.
+ */
+export class ChatTurnFailedError extends DomainError {
+  constructor(
+    public readonly turnId: string,
+    public readonly conversationId: string,
+  ) {
+    super('Chat turn failed', 'CHAT_TURN_FAILED');
+    this.name = 'ChatTurnFailedError';
+  }
+}

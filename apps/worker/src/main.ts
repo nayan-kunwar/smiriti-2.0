@@ -3,6 +3,7 @@ import pino from 'pino';
 import { Queue, Worker, type Job } from 'bullmq';
 import { loadConfig } from '@smriti/shared';
 import {
+  CLEANUP_CHAT_TURNS_JOB,
   CLEANUP_IDEMPOTENCY_KEYS_JOB,
   CLEANUP_JOB_FAILURES_JOB,
   DELETE_VECTORS_JOB,
@@ -17,6 +18,7 @@ import {
   disconnectPrisma,
   getPrismaClient,
   Metrics,
+  PrismaChatTurnRepository,
   PrismaIdempotencyStore,
   PrismaJobFailureRepository,
   PrismaMemoryEmbeddingStore,
@@ -67,6 +69,7 @@ async function main(): Promise<void> {
   const indexStateStore = new PrismaMemoryIndexStateStore(prisma);
   const idempotencyStore = new PrismaIdempotencyStore(prisma);
   const jobFailureRepository = new PrismaJobFailureRepository(prisma);
+  const chatTurnRepository = new PrismaChatTurnRepository(prisma);
   const jobQueue = new BullMqJobQueue(config.REDIS_URL, {
     attempts: config.JOB_ATTEMPTS,
     backoffDelayMs: config.JOB_BACKOFF_DELAY_MS,
@@ -176,6 +179,21 @@ async function main(): Promise<void> {
         );
         return;
       }
+      if (job.name === CLEANUP_CHAT_TURNS_JOB) {
+        const cutoff = new Date(
+          Date.now() - config.CHAT_TURN_RETENTION_DAYS * 24 * 60 * 60 * 1_000,
+        );
+        const deleted = await chatTurnRepository.deleteOlderThan(cutoff);
+        logger.info(
+          {
+            jobId: job.id,
+            deleted,
+            retentionDays: config.CHAT_TURN_RETENTION_DAYS,
+          },
+          'cleanup-chat-turns complete',
+        );
+        return;
+      }
       if (job.name === RECONCILE_VECTORS_JOB) {
         const summary = await reconcileVectors({
           memoryRepository,
@@ -258,6 +276,19 @@ async function main(): Promise<void> {
       retentionDays: config.JOB_FAILURE_RETENTION_DAYS,
     },
     'Job failure cleanup scheduler registered',
+  );
+
+  await schedulerQueue.upsertJobScheduler(
+    'cleanup-chat-turns',
+    { every: config.CHAT_TURN_CLEANUP_INTERVAL_MINUTES * 60_000 },
+    { name: CLEANUP_CHAT_TURNS_JOB, data: {} },
+  );
+  logger.info(
+    {
+      intervalMinutes: config.CHAT_TURN_CLEANUP_INTERVAL_MINUTES,
+      retentionDays: config.CHAT_TURN_RETENTION_DAYS,
+    },
+    'Chat turn cleanup scheduler registered',
   );
 
   const metricsServer = createServer(async (request, response) => {

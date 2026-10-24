@@ -15,6 +15,7 @@ export interface DuplicateWarning {
 }
 
 export interface ChatGraphState {
+  turnId: string;
   userId: string;
   conversationId: string;
   correlationId: string;
@@ -32,6 +33,7 @@ export interface ChatGraphState {
 }
 
 export interface ChatCommandResult {
+  turnId: string;
   conversationId: string;
   message: string;
   memoriesCreated: string[];

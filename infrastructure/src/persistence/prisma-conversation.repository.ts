@@ -25,6 +25,7 @@ function toMessage(record: PrismaConversationMessage): ConversationMessageRecord
   return {
     id: record.id,
     conversationId: record.conversationId,
+    turnId: record.turnId,
     role: record.role as ConversationRole,
     content: record.content,
     createdAt: record.createdAt,
@@ -52,10 +53,11 @@ export class PrismaConversationRepository implements ConversationRepository {
     conversationId: string,
     role: ConversationRole,
     content: string,
+    turnId?: string,
   ): Promise<ConversationMessageRecord> {
     const [message] = await this.prisma.$transaction([
       this.prisma.conversationMessage.create({
-        data: { conversationId, role, content },
+        data: { conversationId, role, content, turnId: turnId ?? null },
       }),
       this.prisma.conversation.update({
         where: { id: conversationId },
@@ -68,6 +70,22 @@ export class PrismaConversationRepository implements ConversationRepository {
   async listMessages(conversationId: string, limit?: number): Promise<ConversationMessageRecord[]> {
     const records = await this.prisma.conversationMessage.findMany({
       where: { conversationId },
+      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+      ...(limit ? { take: limit } : {}),
+    });
+    return records.map(toMessage).reverse();
+  }
+
+  async listMessagesForContext(
+    conversationId: string,
+    excludeTurnId: string | null,
+    limit?: number,
+  ): Promise<ConversationMessageRecord[]> {
+    const records = await this.prisma.conversationMessage.findMany({
+      where: {
+        conversationId,
+        ...(excludeTurnId ? { OR: [{ turnId: null }, { turnId: { not: excludeTurnId } }] } : {}),
+      },
       orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
       ...(limit ? { take: limit } : {}),
     });

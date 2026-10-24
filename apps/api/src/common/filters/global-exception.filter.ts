@@ -14,6 +14,7 @@ import {
   ValidationError,
   ConflictError,
   UnauthorizedError,
+  ChatTurnFailedError,
 } from '@smriti/shared';
 
 @Catch()
@@ -67,6 +68,20 @@ export class GlobalExceptionFilter implements ExceptionFilter {
         statusCode: HttpStatus.UNAUTHORIZED,
         error: 'Unauthorized',
         message: exception.message,
+        correlationId,
+      });
+      return;
+    }
+
+    if (exception instanceof ChatTurnFailedError) {
+      response.status(HttpStatus.INTERNAL_SERVER_ERROR).json({
+        statusCode: HttpStatus.INTERNAL_SERVER_ERROR,
+        error: 'Chat Turn Failed',
+        message: 'The chat turn failed. Inspect or retry it with the returned turnId.',
+        code: exception.code,
+        turnId: exception.turnId,
+        conversationId: exception.conversationId,
+        retryable: true,
         correlationId,
       });
       return;

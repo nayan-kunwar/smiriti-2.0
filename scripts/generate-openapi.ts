@@ -98,6 +98,7 @@ const SearchMemoriesRequestSchema = z.object({
 });
 
 const ChatResponseSchema = z.object({
+  turnId: z.string().uuid(),
   conversationId: z.string().uuid(),
   message: z.string(),
   memoriesCreated: z.array(z.string().uuid()),
@@ -108,6 +109,17 @@ const ChatResponseSchema = z.object({
       similarity: z.number(),
     }),
   ),
+});
+
+const ChatTurnSchema = z.object({
+  turnId: z.string().uuid(),
+  conversationId: z.string().uuid(),
+  status: z.enum(['in_progress', 'completed', 'failed']),
+  attempts: z.number().int(),
+  error: z.object({ code: z.string(), message: z.string() }).nullable(),
+  result: ChatResponseSchema.nullable(),
+  createdAt: z.string().datetime(),
+  updatedAt: z.string().datetime(),
 });
 
 const ConversationSchema = z.object({
@@ -166,6 +178,10 @@ const ErrorResponseSchema = z.object({
   error: z.string(),
   message: z.string(),
   correlationId: z.string(),
+  code: z.string().optional(),
+  turnId: z.string().uuid().optional(),
+  conversationId: z.string().uuid().optional(),
+  retryable: z.boolean().optional(),
   reason: z.string().optional(),
   retryAfterSeconds: z.number().int().optional(),
   existingMemoryId: z.string().uuid().optional(),
@@ -188,6 +204,7 @@ registry.register('ScoredMemory', ScoredMemorySchema);
 registry.register('ListMemoriesResponse', ListMemoriesResponseSchema);
 registry.register('SearchMemoriesResponse', SearchMemoriesResponseSchema);
 registry.register('ChatResponse', ChatResponseSchema);
+registry.register('ChatTurn', ChatTurnSchema);
 registry.register('Conversation', ConversationSchema);
 registry.register('ConversationMessage', ConversationMessageSchema);
 registry.register('ConversationMessagesResponse', ConversationMessagesResponseSchema);
@@ -475,7 +492,50 @@ registry.registerPath({
     },
     400: error('Validation failed'),
     401: error('Unauthorized'),
-    409: error('Idempotency conflict. Reasons: IDEMPOTENCY_KEY_REUSE or IDEMPOTENCY_IN_PROGRESS.'),
+    409: error(
+      'Idempotency or turn conflict. Codes: IDEMPOTENCY_KEY_REUSE, IDEMPOTENCY_IN_PROGRESS, CHAT_TURN_IN_PROGRESS, CHAT_TURN_KEY_REUSE, CHAT_TURN_RETRY_EXHAUSTED.',
+    ),
+    500: error(
+      'The turn failed after its user message was persisted. The body carries code CHAT_TURN_FAILED and the turnId for retry.',
+    ),
+  },
+});
+
+registry.registerPath({
+  method: 'post',
+  path: '/v1/chat/turns/{turnId}/retry',
+  tags: ['Chat'],
+  summary: 'Retry a failed or stale chat turn',
+  description:
+    'Reclaims a failed turn (or one whose execution lock expired) and re-runs the graph. The user message is reused, memories already written by the turn are skipped by content hash, and the assistant message is appended once. A completed turn replays its stored result.',
+  security: auth,
+  request: { params: z.object({ turnId: z.string().uuid() }) },
+  responses: {
+    200: json(ChatResponseSchema, 'Turn completed or replayed'),
+    400: error('Malformed turn ID'),
+    401: error('Unauthorized'),
+    404: error('Chat turn not found'),
+    409: error(
+      'Turn is still in progress (CHAT_TURN_IN_PROGRESS) or has reached its retry limit (CHAT_TURN_RETRY_EXHAUSTED).',
+    ),
+    500: error('The retried turn failed again. Body carries code CHAT_TURN_FAILED and the turnId.'),
+  },
+});
+
+registry.registerPath({
+  method: 'get',
+  path: '/v1/chat/turns/{turnId}',
+  tags: ['Chat'],
+  summary: 'Get a chat turn status',
+  description:
+    'Returns the durable turn state, attempt count, sanitized error, and the stored result for completed turns.',
+  security: auth,
+  request: { params: z.object({ turnId: z.string().uuid() }) },
+  responses: {
+    200: json(ChatTurnSchema, 'Turn status'),
+    400: error('Malformed turn ID'),
+    401: error('Unauthorized'),
+    404: error('Chat turn not found'),
   },
 });
 

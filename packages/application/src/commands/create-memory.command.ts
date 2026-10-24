@@ -26,6 +26,8 @@ export interface CreateMemoryContext {
   correlationId: string;
   /** Bypass the duplicate check (REST `?force=true`). */
   force?: boolean;
+  /** Set when the memory is created by a chat turn; enables retry idempotency. */
+  turnId?: string;
 }
 
 export async function createMemory(
@@ -52,6 +54,7 @@ export async function createMemory(
     importance: input.importance,
     confidence: input.confidence,
     conversationId: input.conversationId,
+    turnId: ctx.turnId,
   });
 
   await deps.memoryRepository.save(memory);
@@ -66,6 +69,7 @@ export async function createMemory(
       contentHash: memory.contentHash,
       category: memory.category,
       tags: memory.tags,
+      ...(ctx.turnId ? { turnId: ctx.turnId } : {}),
     },
     correlationId: ctx.correlationId,
   });

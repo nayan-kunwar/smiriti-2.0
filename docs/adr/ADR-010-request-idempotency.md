@@ -48,8 +48,8 @@ Only successful responses are cached. A `409` duplicate-memory or validation err
 
 ### Negative
 
-- The request still performs multiple database writes (memory/audit/index state, or message/graph/message), so idempotency cannot repair a crash that happens mid-request.
-- Chat has no transaction across user message, graph side effects, and assistant message. A failure after partial persistence leaves partial history; a retry without the same key starts a new turn.
+- The request still performs multiple database writes (memory/audit/index state), so idempotency cannot repair a crash that happens mid-request.
+- Chat turn durability is handled separately by [ADR-011](ADR-011-chat-turn-durability.md): failed turns are durable, inspectable, and retryable, and reusing the same key resumes the failed turn.
 - A response snapshot can be stale relative to later changes (for example, a memory edited after creation) — replay reflects the original response by design.
 - A slow request longer than the lock timeout can be taken over by a retry, so the lock should exceed the expected worst-case handler latency.
 - Keeping only successful responses means clients cannot replay a deterministic validation error.
@@ -57,7 +57,7 @@ Only successful responses are cached. A `409` duplicate-memory or validation err
 ### Deferred
 
 - Idempotency for update/delete and bulk endpoints.
-- Transactional outbox or a turn-level transaction for chat.
+- Transactional outbox for the multi-step memory write.
 - Admin visibility into idempotency records.
 
 ## Compliance

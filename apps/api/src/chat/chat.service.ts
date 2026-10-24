@@ -1,8 +1,16 @@
 import { Inject, Injectable } from '@nestjs/common';
 import type { PrismaClient } from '@prisma/client';
-import { chat, type ChatCommandResult } from '@smriti/application';
+import {
+  chat,
+  retryChatTurn,
+  type ChatCommandResult,
+  type ChatCommandDeps,
+} from '@smriti/application';
 import type {
   ChatModel,
+  ChatTurnRecord,
+  ChatTurnResultSnapshot,
+  ChatTurnStatus,
   ConversationMessageRecord,
   ConversationRecord,
   ConversationRepository,
@@ -11,7 +19,9 @@ import type {
   VectorStore,
 } from '@smriti/domain';
 import {
+  Metrics,
   PrismaAuditLogRepository,
+  PrismaChatTurnRepository,
   PrismaConversationRepository,
   PrismaMemoryIndexStateStore,
   PrismaMemoryRepository,
@@ -22,8 +32,9 @@ import type {
   CreateConversationInput,
   ListConversationMessagesQueryInput,
 } from '@smriti/shared';
-import { NotFoundError } from '@smriti/shared';
+import { ChatTurnFailedError, ConflictError, NotFoundError } from '@smriti/shared';
 import { APP_CONFIG } from '../config/config.module.js';
+import { METRICS } from '../metrics/metrics.constants.js';
 import { EMBEDDING_PROVIDER, JOB_QUEUE, VECTOR_STORE } from '../memory/memory.tokens.js';
 import { PRISMA_CLIENT } from '../prisma/prisma.module.js';
 import { CHAT_MODEL } from './chat.tokens.js';
@@ -42,6 +53,17 @@ export interface ConversationMessageDto {
   role: string;
   content: string;
   createdAt: string;
+}
+
+export interface ChatTurnDto {
+  turnId: string;
+  conversationId: string;
+  status: ChatTurnStatus;
+  attempts: number;
+  error: { code: string; message: string } | null;
+  result: ChatTurnResultSnapshot | null;
+  createdAt: string;
+  updatedAt: string;
 }
 
 function toConversationDto(record: ConversationRecord): ConversationDto {
@@ -64,9 +86,29 @@ function toMessageDto(record: ConversationMessageRecord): ConversationMessageDto
   };
 }
 
+function toTurnDto(record: ChatTurnRecord): ChatTurnDto {
+  return {
+    turnId: record.id,
+    conversationId: record.conversationId,
+    status: record.status,
+    attempts: record.attempts,
+    error: record.errorCode
+      ? {
+          code: record.errorCode,
+          message:
+            'The chat turn failed. Retry it with POST /v1/chat/turns/{turnId}/retry or inspect the server logs with the correlation ID.',
+        }
+      : null,
+    result: record.resultSnapshot,
+    createdAt: record.createdAt.toISOString(),
+    updatedAt: record.updatedAt.toISOString(),
+  };
+}
+
 @Injectable()
 export class ChatService {
   private readonly conversationRepository: ConversationRepository;
+  private readonly chatTurnRepository: PrismaChatTurnRepository;
   private readonly memoryRepository: PrismaMemoryRepository;
   private readonly auditLogRepository: PrismaAuditLogRepository;
   private readonly indexStateStore: PrismaMemoryIndexStateStore;
@@ -78,11 +120,31 @@ export class ChatService {
     @Inject(JOB_QUEUE) private readonly jobQueue: JobQueue,
     @Inject(CHAT_MODEL) private readonly chatModel: ChatModel,
     @Inject(APP_CONFIG) private readonly config: AppConfig,
+    @Inject(METRICS) private readonly metrics: Metrics,
   ) {
     this.conversationRepository = new PrismaConversationRepository(prisma);
+    this.chatTurnRepository = new PrismaChatTurnRepository(prisma);
     this.memoryRepository = new PrismaMemoryRepository(prisma);
     this.auditLogRepository = new PrismaAuditLogRepository(prisma);
     this.indexStateStore = new PrismaMemoryIndexStateStore(prisma);
+  }
+
+  private commandDeps(): ChatCommandDeps {
+    return {
+      conversationRepository: this.conversationRepository,
+      chatTurnRepository: this.chatTurnRepository,
+      chatModel: this.chatModel,
+      memoryRepository: this.memoryRepository,
+      auditLogRepository: this.auditLogRepository,
+      jobQueue: this.jobQueue,
+      indexStateStore: this.indexStateStore,
+      embeddingProvider: this.embeddingProvider,
+      vectorStore: this.vectorStore,
+      dedupThreshold: this.config.DEDUP_SIMILARITY_THRESHOLD,
+      searchTimeoutMs: this.config.DEDUP_TIMEOUT_MS,
+      turnLockTimeoutMs: this.config.CHAT_TURN_LOCK_TIMEOUT_MS,
+      turnMaxAttempts: this.config.CHAT_TURN_MAX_ATTEMPTS,
+    };
   }
 
   async createConversation(
@@ -109,26 +171,64 @@ export class ChatService {
     return { conversationId, items: messages.map(toMessageDto) };
   }
 
-  send(userId: string, correlationId: string, input: ChatRequestInput): Promise<ChatCommandResult> {
-    return chat(
-      {
-        conversationRepository: this.conversationRepository,
-        chatModel: this.chatModel,
-        memoryRepository: this.memoryRepository,
-        auditLogRepository: this.auditLogRepository,
-        jobQueue: this.jobQueue,
-        indexStateStore: this.indexStateStore,
-        embeddingProvider: this.embeddingProvider,
-        vectorStore: this.vectorStore,
-        dedupThreshold: this.config.DEDUP_SIMILARITY_THRESHOLD,
-        searchTimeoutMs: this.config.DEDUP_TIMEOUT_MS,
-      },
-      {
+  async send(
+    userId: string,
+    correlationId: string,
+    input: ChatRequestInput,
+    idempotencyKey?: string,
+  ): Promise<ChatCommandResult> {
+    const startedAt = Date.now();
+    try {
+      const result = await chat(this.commandDeps(), {
         userId,
         correlationId,
         conversationId: input.conversationId,
         message: input.message,
-      },
-    );
+        idempotencyKey,
+      });
+      this.metrics.observeChatTurn('completed', (Date.now() - startedAt) / 1000);
+      return result;
+    } catch (err) {
+      if (err instanceof ChatTurnFailedError) {
+        this.metrics.observeChatTurn('failed', (Date.now() - startedAt) / 1000);
+      }
+      throw err;
+    }
+  }
+
+  async retryTurn(
+    userId: string,
+    turnId: string,
+    correlationId: string,
+  ): Promise<ChatCommandResult> {
+    const startedAt = Date.now();
+    try {
+      const { result, replayed } = await retryChatTurn(this.commandDeps(), {
+        userId,
+        turnId,
+        correlationId,
+      });
+      this.metrics.observeChatTurnRetry(replayed ? 'replayed' : 'completed');
+      if (!replayed) {
+        this.metrics.observeChatTurn('completed', (Date.now() - startedAt) / 1000);
+      }
+      return result;
+    } catch (err) {
+      if (err instanceof ChatTurnFailedError) {
+        this.metrics.observeChatTurn('failed', (Date.now() - startedAt) / 1000);
+        this.metrics.observeChatTurnRetry('failed');
+      } else if (err instanceof ConflictError) {
+        this.metrics.observeChatTurnRetry('conflict');
+      }
+      throw err;
+    }
+  }
+
+  async getTurn(userId: string, turnId: string): Promise<ChatTurnDto> {
+    const turn = await this.chatTurnRepository.findById(userId, turnId);
+    if (!turn) {
+      throw new NotFoundError('Chat turn', turnId);
+    }
+    return toTurnDto(turn);
   }
 }

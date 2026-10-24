@@ -16,6 +16,7 @@ import {
   FakeChatModel,
   FakeEmbeddingProvider,
   InMemoryAuditLogRepository,
+  InMemoryChatTurnRepository,
   InMemoryConversationRepository,
   InMemoryMemoryRepository,
   InMemoryVectorStore,
@@ -177,6 +178,7 @@ async function runChatTask(
   const startedAt = Date.now();
   const memoryRepository = new InMemoryMemoryRepository();
   const conversationRepository = new InMemoryConversationRepository();
+  const chatTurnRepository = new InMemoryChatTurnRepository(conversationRepository);
   const auditLogRepository = new InMemoryAuditLogRepository();
   const embeddingProvider = new FakeEmbeddingProvider();
   const vectorStore = new InMemoryVectorStore();
@@ -220,6 +222,7 @@ async function runChatTask(
     const result = await chat(
       {
         conversationRepository,
+        chatTurnRepository,
         chatModel,
         memoryRepository,
         auditLogRepository,

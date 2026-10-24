@@ -39,6 +39,12 @@ enum JobFailureStatus {
   retried
 }
 
+enum ChatTurnStatus {
+  in_progress
+  completed
+  failed
+}
+
 model User {
   id           String   @id @default(uuid()) @db.Uuid
   email        String   @unique
@@ -52,6 +58,7 @@ model User {
   conversations   Conversation[]
   auditLogs       AuditLog[]
   idempotencyKeys IdempotencyKey[]
+  chatTurns       ChatTurn[]
 
   @@map("users")
 }
@@ -97,31 +104,35 @@ model Memory {
   isPinned       Boolean    @default(false) @map("is_pinned")
   isArchived     Boolean    @default(false) @map("is_archived")
   conversationId String?    @map("conversation_id") @db.Uuid
+  turnId         String?    @map("turn_id") @db.Uuid
   contentHash    String     @map("content_hash")
   createdAt      DateTime   @default(now()) @map("created_at")
   updatedAt      DateTime   @updatedAt @map("updated_at")
 
   user         User              @relation(fields: [userId], references: [id], onDelete: Cascade)
   conversation Conversation?     @relation(fields: [conversationId], references: [id], onDelete: SetNull)
+  turn         ChatTurn?         @relation(fields: [turnId], references: [id], onDelete: SetNull)
   embeddings   MemoryEmbedding[]
   indexState   MemoryIndexState?
 
+  @@unique([turnId, contentHash])
   @@index([userId, createdAt(sort: Desc)])
   @@index([userId, category])
+  @@index([turnId])
   @@map("memories")
 }
 
 model MemoryEmbedding {
-  id             String          @id @default(uuid()) @db.Uuid
-  memoryId       String          @map("memory_id") @db.Uuid
-  chunkIndex     Int             @default(0) @map("chunk_index")
-  tokenCount     Int             @map("token_count")
-  provider       String
-  model          String
-  dimension      Int
-  qdrantPointId  String          @map("qdrant_point_id")
-  status         EmbeddingStatus @default(pending)
-  indexedAt      DateTime?       @map("indexed_at")
+  id            String          @id @default(uuid()) @db.Uuid
+  memoryId      String          @map("memory_id") @db.Uuid
+  chunkIndex    Int             @default(0) @map("chunk_index")
+  tokenCount    Int             @map("token_count")
+  provider      String
+  model         String
+  dimension     Int
+  qdrantPointId String          @map("qdrant_point_id")
+  status        EmbeddingStatus @default(pending)
+  indexedAt     DateTime?       @map("indexed_at")
 
   memory Memory @relation(fields: [memoryId], references: [id], onDelete: Cascade)
 
@@ -150,9 +161,10 @@ model Conversation {
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
 
-  user     User                  @relation(fields: [userId], references: [id], onDelete: Cascade)
-  messages ConversationMessage[]
-  memories Memory[]
+  user      User                  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  messages  ConversationMessage[]
+  memories  Memory[]
+  chatTurns ChatTurn[]
 
   @@index([userId, createdAt(sort: Desc)])
   @@map("conversations")
@@ -161,14 +173,47 @@ model Conversation {
 model ConversationMessage {
   id             String      @id @default(uuid()) @db.Uuid
   conversationId String      @map("conversation_id") @db.Uuid
+  turnId         String?     @map("turn_id") @db.Uuid
   role           MessageRole
   content        String      @db.Text
   createdAt      DateTime    @default(now()) @map("created_at")
 
   conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  turn         ChatTurn?    @relation(fields: [turnId], references: [id], onDelete: SetNull)
 
   @@index([conversationId, createdAt])
+  @@index([turnId])
   @@map("conversation_messages")
+}
+
+model ChatTurn {
+  id             String         @id @default(uuid()) @db.Uuid
+  userId         String         @map("user_id") @db.Uuid
+  conversationId String         @map("conversation_id") @db.Uuid
+  status         ChatTurnStatus @default(in_progress)
+  correlationId  String         @map("correlation_id")
+  idempotencyKey String?        @map("idempotency_key")
+  lockToken      String?        @map("lock_token")
+  lockedUntil    DateTime?      @map("locked_until")
+  attempts       Int            @default(1)
+  errorCode      String?        @map("error_code")
+  errorMessage   String?        @map("error_message") @db.Text
+  resultSnapshot Json?          @map("result_snapshot")
+  completedAt    DateTime?      @map("completed_at")
+  failedAt       DateTime?      @map("failed_at")
+  createdAt      DateTime       @default(now()) @map("created_at")
+  updatedAt      DateTime       @updatedAt @map("updated_at")
+
+  user         User                  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  conversation Conversation          @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  messages     ConversationMessage[]
+  memories     Memory[]
+
+  @@unique([userId, idempotencyKey])
+  @@index([userId, createdAt(sort: Desc)])
+  @@index([status, lockedUntil])
+  @@index([conversationId, createdAt])
+  @@map("chat_turns")
 }
 
 model AuditLog {

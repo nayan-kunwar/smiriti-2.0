@@ -17,6 +17,7 @@ export interface MemoryProps {
   isPinned: boolean;
   isArchived: boolean;
   conversationId: string | null;
+  turnId: string | null;
   contentHash: string;
   createdAt: Date;
   updatedAt: Date;
@@ -31,6 +32,7 @@ export interface CreateMemoryParams {
   importance?: number;
   confidence?: number;
   conversationId?: string | null;
+  turnId?: string | null;
 }
 
 export interface UpdateMemoryParams {
@@ -71,6 +73,7 @@ export class Memory {
       isPinned: false,
       isArchived: false,
       conversationId: params.conversationId ?? null,
+      turnId: params.turnId ?? null,
       contentHash: computeContentHash(content),
       createdAt: now,
       updatedAt: now,
@@ -123,6 +126,10 @@ export class Memory {
 
   get conversationId(): string | null {
     return this.props.conversationId;
+  }
+
+  get turnId(): string | null {
+    return this.props.turnId;
   }
 
   get contentHash(): string {

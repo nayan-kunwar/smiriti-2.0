@@ -9,6 +9,11 @@ export class FakeChatModel implements ChatModel {
     this.responses = [...responses];
   }
 
+  /** Append responses for a later phase of a test (for example, a retry). */
+  push(...responses: string[]): void {
+    this.responses.push(...responses);
+  }
+
   async complete(messages: ChatMessage[], _options?: ChatCompletionOptions): Promise<string> {
     this.calls.push(messages.map((message) => ({ ...message })));
     const response = this.responses.shift();

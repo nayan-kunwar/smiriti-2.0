@@ -1,8 +1,8 @@
 # Smriti v1 Architecture
 
-> **Status**: v1 implemented (memory CRUD, semantic search, async indexing, reconciliation, durable terminal job failures with admin replay, REST/chat dedup, request idempotency, per-principal rate limiting, auth/API-key audit events, Prometheus metrics, and LangGraph `/v1/chat`).
+> **Status**: v1.5 implemented (memory CRUD, semantic search, async indexing, reconciliation, durable terminal job failures with admin replay, REST/chat dedup, request idempotency, durable retry-safe chat turns, per-principal rate limiting, auth/API-key audit events, Prometheus metrics, and LangGraph `/v1/chat`).
 > **Scope**: Long-term + semantic memory, REST APIs, LangGraph `/chat`, embedding pipeline, auth, observability
-> **Not in v1**: object storage, streaming chat/checkpointing, automated DLQ replay.
+> **Not in v1.5**: object storage, streaming chat/checkpointing, automated DLQ replay, LangGraph checkpointer, v2 memory types.
 > **Last updated**: 2026-10-24
 
 ---
@@ -124,15 +124,15 @@ Admins list failures with `GET /v1/admin/job-failures` and replay one with `POST
 
 1. Client sends `POST /v1/chat` with `{ message, conversationId? }` and an optional `Idempotency-Key`.
 2. If a key is supplied, the API reserves or replays it before doing any conversation work.
-3. The API finds or creates an owned conversation and loads the last 20 messages as history.
-4. The user message is appended to Postgres before the graph runs.
-5. `classify` asks the chat model for `remember`, `recall`, or `general` intent and extracts candidate memories for `remember`.
-6. `remember`: `validate` trims/deduplicates extracted content, then `persist` runs best-effort dedup per memory and calls the shared `createMemory` use case. Duplicates are skipped and reported as warnings.
+3. The API finds or creates an owned conversation.
+4. The API starts a durable `chat_turns` row in one Postgres transaction that also appends the user message with `turn_id`. The turn records the correlation ID, idempotency key, execution lock, and attempt count.
+5. The graph loads history excluding messages already written by this turn, then `classify` asks the chat model for `remember`, `recall`, or `general` intent and extracts candidate memories for `remember`.
+6. `remember`: `validate` trims/deduplicates extracted content, then `persist` runs best-effort dedup per memory and calls the shared `createMemory` use case with the turn ID. Duplicates are skipped and reported as warnings; memories already written by this turn are reused by `(turn_id, content_hash)` instead of being created again.
 7. `recall`: `retrieve` embeds the user message, searches Qdrant, hydrates the matching Postgres rows, and `buildContext` wraps them in `<retrieved_memories>` delimiters.
 8. `respond` generates the assistant reply with bounded history and context.
-9. The assistant message is appended to Postgres and the synchronous response returns the conversation ID plus created/retrieved IDs and dedup warnings. The response is stored against the idempotency key when one was supplied.
+9. Finalization is atomic: the assistant message and the turn's `completed` status plus result snapshot commit in one transaction, guarded by the lock token. The synchronous response returns `turnId`, the conversation ID, created/retrieved IDs, and dedup warnings. The response is stored against the idempotency key when one was supplied.
 
-Chat idempotency replays successful turns, so a retry does not create a second user/assistant pair or repeat memory persistence. There is still no transaction across user message, graph, and assistant message: a crash after partial persistence can leave partial history, and a retry after that failure creates a new turn.
+Failures mark the turn `failed` with a sanitized error code/message and release the lock. `POST /v1/chat` returns `500` with `code: "CHAT_TURN_FAILED"`, `turnId`, and `conversationId`. Clients can inspect it with `GET /v1/chat/turns/:turnId` and retry it with `POST /v1/chat/turns/:turnId/retry`, or simply repeat the original request with the same `Idempotency-Key` to auto-resume it. A retry reuses the persisted user message, reuses memories already written by the turn, and appends at most one assistant message. Retries are capped by `CHAT_TURN_MAX_ATTEMPTS`; a completed turn replays its stored snapshot. A stale `in_progress` turn whose lock expired is reclaimable. Completed and failed turns are retained for `CHAT_TURN_RETENTION_DAYS`; cleanup deletes turn rows and leaves messages/memories with `turn_id = NULL`.
 
 ---
 
@@ -202,14 +202,16 @@ sequenceDiagram
   participant PG as Postgres
 
   C->>API: POST /v1/chat
-  API->>PG: find/create conversation, load history
-  API->>PG: persist user message
-  API->>LG: run graph(state)
+  API->>PG: find/create conversation
+  API->>PG: start turn + user message (one transaction)
+  API->>PG: load history excluding this turn
+  API->>LG: run graph(state, turnId)
 
   LG->>LLM: classify + extract (JSON)
   alt remember
+    LG->>PG: load memories already written by this turn
     LG->>App: best-effort dedup per extracted memory
-    LG->>App: createMemory (same as REST)
+    LG->>App: createMemory (same as REST, with turnId)
     App->>PG: persist memory + index state; enqueue embed
   else recall
     LG->>App: searchMemories
@@ -219,8 +221,16 @@ sequenceDiagram
 
   LG->>LLM: generate response
   LG-->>API: response + created/retrieved IDs + warnings
-  API->>PG: persist assistant message
-  API-->>C: 200 OK
+  alt success
+    API->>PG: finalize turn + assistant message (one transaction)
+    API-->>C: 200 OK (turnId)
+  else failure
+    API->>PG: mark turn failed, release lock
+    API-->>C: 500 CHAT_TURN_FAILED (turnId)
+  end
+  C->>API: POST /v1/chat/turns/:turnId/retry
+  API->>PG: claim failed/stale turn, reuse user message
+  API->>LG: re-run graph (memories reused by content hash)
 ```
 
 ---
@@ -235,11 +245,15 @@ erDiagram
   users ||--o{ conversations : owns
   users ||--o{ audit_logs : generates
   users ||--o{ idempotency_keys : owns
+  users ||--o{ chat_turns : owns
 
   memories ||--o{ memory_embeddings : has
   memories ||--o| memory_index_states : has
   conversations ||--o{ conversation_messages : contains
   conversations ||--o{ memories : "optional link"
+  conversations ||--o{ chat_turns : contains
+  chat_turns ||--o{ conversation_messages : groups
+  chat_turns ||--o{ memories : "groups"
 
   users {
     uuid id PK
@@ -261,6 +275,7 @@ erDiagram
     boolean is_pinned
     boolean is_archived
     uuid conversation_id FK
+    uuid turn_id FK
     string content_hash
     timestamp created_at
     timestamp updated_at
@@ -299,9 +314,29 @@ erDiagram
   conversation_messages {
     uuid id PK
     uuid conversation_id FK
+    uuid turn_id FK
     enum role
     text content
     timestamp created_at
+  }
+
+  chat_turns {
+    uuid id PK
+    uuid user_id FK
+    uuid conversation_id FK
+    enum status
+    string correlation_id
+    string idempotency_key
+    string lock_token
+    timestamp locked_until
+    int attempts
+    string error_code
+    text error_message
+    jsonb result_snapshot
+    timestamp completed_at
+    timestamp failed_at
+    timestamp created_at
+    timestamp updated_at
   }
 
   audit_logs {
@@ -357,6 +392,13 @@ erDiagram
 - `memory_embeddings (memory_id)`
 - `memory_index_states (status)`
 - `conversation_messages (conversation_id, created_at)`
+- `conversation_messages (turn_id)`
+- `memories (turn_id)`
+- `memories (turn_id, content_hash)` (unique; enables per-turn memory idempotency)
+- `chat_turns (user_id, created_at DESC)`
+- `chat_turns (user_id, idempotency_key)` (unique)
+- `chat_turns (status, locked_until)`
+- `chat_turns (conversation_id, created_at)`
 - `audit_logs (user_id, created_at DESC)`
 - `idempotency_keys (user_id)`
 - `idempotency_keys (expires_at)`
@@ -479,11 +521,13 @@ Search hits currently report `indexingStatus: "indexed"` because they come from 
 
 ### 5.3 Chat
 
-| Method | Path                             | Description           |
-| ------ | -------------------------------- | --------------------- |
-| POST   | `/v1/chat`                       | Synchronous chat turn |
-| POST   | `/v1/conversations`              | Create conversation   |
-| GET    | `/v1/conversations/:id/messages` | List messages         |
+| Method | Path                             | Description                    |
+| ------ | -------------------------------- | ------------------------------ |
+| POST   | `/v1/chat`                       | Synchronous chat turn          |
+| POST   | `/v1/chat/turns/:turnId/retry`   | Retry a failed or stale turn   |
+| GET    | `/v1/chat/turns/:turnId`         | Get durable turn status/result |
+| POST   | `/v1/conversations`              | Create conversation            |
+| GET    | `/v1/conversations/:id/messages` | List messages                  |
 
 #### Chat Request
 
@@ -498,6 +542,7 @@ Search hits currently report `indexingStatus: "indexed"` because they come from 
 
 ```typescript
 {
+  turnId: string;
   conversationId: string;
   message: string;
   memoriesCreated: string[];   // memory IDs persisted this turn
@@ -506,7 +551,24 @@ Search hits currently report `indexingStatus: "indexed"` because they come from 
 }
 ```
 
+#### Chat Turn Response
+
+```typescript
+{
+  turnId: string;
+  conversationId: string;
+  status: "in_progress" | "completed" | "failed";
+  attempts: number;
+  error: { code: string; message: string } | null;
+  result: ChatResponse | null; // stored snapshot for completed turns
+  createdAt: string;
+  updatedAt: string;
+}
+```
+
 `POST /v1/conversations` accepts `{ title?: string }`. `GET /v1/conversations/:id/messages` accepts `limit` (default 50, max 200) and returns messages in ascending age order. Both chat and message endpoints verify conversation ownership. Chat accepts `Idempotency-Key` with the same replay/conflict semantics as memory creation.
+
+Turn conflicts use `409` with `code` `CHAT_TURN_IN_PROGRESS`, `CHAT_TURN_KEY_REUSE`, or `CHAT_TURN_RETRY_EXHAUSTED` and include `turnId`. A failed execution returns `500` with `code: "CHAT_TURN_FAILED"`, `turnId`, `conversationId`, and `retryable: true`. Retrying a completed turn replays its stored result; retrying a failed or stale turn re-runs the graph with the persisted user message.
 
 ### 5.4 Admin
 
@@ -542,6 +604,10 @@ Search hits currently report `indexingStatus: "indexed"` because they come from 
   similarity?: number;       // 409 dedup conflict
   reason?: string;           // 409 idempotency conflict or 429 rate limit
   retryAfterSeconds?: number; // 409 in-progress conflict or 429 rate limit
+  code?: string;             // CHAT_TURN_* conflict/failure code
+  turnId?: string;           // chat turn involved in a conflict or failure
+  conversationId?: string;   // conversation of a failed turn
+  retryable?: boolean;       // true on CHAT_TURN_FAILED
   details?: unknown;         // validation errors
 }
 ```
@@ -556,6 +622,7 @@ Search hits currently report `indexingStatus: "indexed"` because they come from 
 
 ```typescript
 interface ChatGraphState {
+  turnId: string;
   userId: string;
   conversationId: string;
   correlationId: string;
@@ -616,7 +683,8 @@ LangGraph nodes call **application services only** (`createMemory`, `searchMemor
 - The classification/extraction call and response call are separate; only two model calls per turn in the normal path.
 - `remember` runs the same shared `createMemory` use case as REST, so audit entries, index state, and BullMQ jobs stay consistent.
 - Chat dedup timeout/failure skips the check rather than blocking the write. REST dedup timeout/failure behaves the same way.
-- A failed graph after the user message is persisted does not roll back that message. Idempotency only replays successful turns; the turn's multi-step writes are not transactional.
+- A failed graph after the user message is persisted does not roll back that message; the durable turn is marked `failed` and can be retried. Retrying re-runs the graph with the stored user message, reuses memories already written by the turn via `findByTurnId` + `(turn_id, content_hash)`, and appends the assistant message only on success.
+- The turn's start and finalize writes are atomic. The graph run itself is not transactional, and there is no LangGraph checkpointer: a retry re-executes the graph from the persisted turn input. Model calls are not deduplicated; only persisted side effects are.
 
 ---
 
@@ -628,14 +696,15 @@ All ports live in `packages/domain/src/ports/`. Adapters live in `infrastructure
 
 | Port                     | Methods                                                                                                          | Adapter(s)                              |
 | ------------------------ | ---------------------------------------------------------------------------------------------------------------- | --------------------------------------- |
-| `MemoryRepository`       | `save`, `findById`, `findByUser`, `findAll`, `existsByIds`, `update`, `delete`                                   | Prisma, in-memory                       |
+| `MemoryRepository`       | `save`, `findById`, `findByUser`, `findAll`, `findByTurnId`, `existsByIds`, `update`, `delete`                   | Prisma, in-memory                       |
 | `MemoryIndexStateStore`  | `markPending`, `markIndexed`, `markFailed`, `findByMemoryIds`                                                    | Prisma, in-memory                       |
 | `MemoryEmbeddingStore`   | `replaceForMemory`, `markStatus`, `deleteForMemory`                                                              | Prisma, in-memory                       |
 | `AuditLogRepository`     | `append`, `findAll`                                                                                              | Prisma, in-memory                       |
 | `UserRepository`         | `save`, `findByEmail`, `findById`, `findAll`                                                                     | Prisma, in-memory                       |
 | `RefreshTokenRepository` | `save`, `findByTokenHash`, `revoke`                                                                              | Prisma, in-memory                       |
 | `ApiKeyRepository`       | `save`, `findByKeyHash`, `findById`, `findByUser`, `delete`, `updateLastUsed`                                    | Prisma, in-memory                       |
-| `ConversationRepository` | `createConversation`, `findConversation`, `appendMessage`, `listMessages`                                        | Prisma, in-memory                       |
+| `ConversationRepository` | `createConversation`, `findConversation`, `appendMessage`, `listMessages`, `listMessagesForContext`              | Prisma, in-memory                       |
+| `ChatTurnRepository`     | `start`, `claimForRetry`, `finalize`, `fail`, `findById`, `deleteOlderThan`                                      | Prisma, in-memory                       |
 | `IdempotencyStore`       | `begin`, `complete`, `abort`, `deleteExpired`                                                                    | Prisma, in-memory                       |
 | `PasswordHasher`         | `hash`, `verify`                                                                                                 | bcrypt                                  |
 | `EmbeddingProvider`      | `embed(texts[])`, `model`, `dimension`, `maxInputTokens`                                                         | OpenAI-compatible (DMR, Ollama, OpenAI) |
@@ -668,6 +737,7 @@ interface MemoryRepository {
   findById(userId: string, id: string): Promise<Memory | null>;
   findByUser(userId: string, query: ListMemoriesQuery): Promise<PaginatedResult<Memory>>;
   findAll(cursor: string | undefined, limit: number): Promise<PaginatedResult<Memory>>;
+  findByTurnId(turnId: string): Promise<Memory[]>;
   existsByIds(ids: string[]): Promise<Set<string>>;
   update(memory: Memory): Promise<void>;
   delete(userId: string, id: string): Promise<boolean>;
@@ -715,8 +785,24 @@ interface ConversationRepository {
     conversationId: string,
     role: ConversationRole,
     content: string,
+    turnId?: string,
   ): Promise<ConversationMessageRecord>;
   listMessages(conversationId: string, limit?: number): Promise<ConversationMessageRecord[]>;
+  listMessagesForContext(
+    conversationId: string,
+    excludeTurnId: string | null,
+    limit?: number,
+  ): Promise<ConversationMessageRecord[]>;
+}
+
+// packages/domain/src/ports/chat-turn-repository.port.ts
+interface ChatTurnRepository {
+  start(input: StartChatTurnInput): Promise<StartChatTurnResult>;
+  claimForRetry(input: ClaimChatTurnInput): Promise<ClaimChatTurnResult>;
+  finalize(input: FinalizeChatTurnInput): Promise<void>;
+  fail(input: FailChatTurnInput): Promise<void>;
+  findById(userId: string, turnId: string): Promise<ChatTurnRecord | null>;
+  deleteOlderThan(cutoff: Date): Promise<number>;
 }
 
 // packages/domain/src/ports/idempotency-store.port.ts
@@ -775,6 +861,10 @@ Validated at boot via Zod (`packages/shared/src/config.ts`). Application **fails
 | `IDEMPOTENCY_TTL_HOURS`                | no        | `24`                                        | Idempotency response cache TTL                                   |
 | `IDEMPOTENCY_LOCK_TIMEOUT_MS`          | no        | `30000`                                     | In-progress reservation stale lock                               |
 | `IDEMPOTENCY_CLEANUP_INTERVAL_MINUTES` | no        | `60`                                        | Expired-key cleanup scheduler interval                           |
+| `CHAT_TURN_LOCK_TIMEOUT_MS`            | no        | `300000`                                    | Turn execution lock; expired locks are reclaimable               |
+| `CHAT_TURN_MAX_ATTEMPTS`               | no        | `5`                                         | Attempt cap for chat turns (initial + retries)                   |
+| `CHAT_TURN_RETENTION_DAYS`             | no        | `30`                                        | Durable `chat_turns` retention                                   |
+| `CHAT_TURN_CLEANUP_INTERVAL_MINUTES`   | no        | `60`                                        | Chat-turn cleanup scheduler interval                             |
 | `JOB_ATTEMPTS`                         | no        | `3`                                         | Attempts for `embed-and-index`/`delete-vectors`                  |
 | `JOB_BACKOFF_DELAY_MS`                 | no        | `1000`                                      | Exponential backoff base delay                                   |
 | `JOB_REMOVE_ON_COMPLETE`               | no        | `100`                                       | Completed BullMQ jobs retained in Redis                          |
@@ -816,17 +906,17 @@ Code defaults are `EMBEDDING_PROVIDER=ollama` and `LLM_PROVIDER=openai`; `.env.e
 
 ### 9.3 Threats and Mitigations
 
-| Threat                                   | Impact                             | Mitigation                                                                                                                                                                |
-| ---------------------------------------- | ---------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Prompt injection** via stored memories | LLM executes attacker instructions | Delimited context blocks; system prompt treats retrieved data as untrusted; eval suite tests injection cases                                                              |
-| **Cross-tenant data access**             | User A reads User B's memories     | All queries scoped by `user_id` from JWT/API key; repository enforces ownership                                                                                           |
-| **API key leakage**                      | Full account access                | Keys stored hashed; shown once at creation; rotation via delete + reissue                                                                                                 |
-| **Rate abuse / DoS**                     | Service degradation                | Redis-backed limits keyed by JWT user, API-key ID, or client IP; named expensive limit for chat/search; in-memory fallback                                                |
-| **SQL injection**                        | Data breach                        | Prisma parameterized queries; no raw SQL without review                                                                                                                   |
-| **Duplicate writes on retry**            | Duplicate memories or chat turns   | Optional `Idempotency-Key` replay on memory create and chat; deterministic BullMQ job IDs + `memory_index_states` hash guards                                             |
-| **Stale vector leakage after delete**    | Deleted memory still searchable    | Delete job + scheduled reconciler with Postgres existence check; document brief consistency window                                                                        |
-| **Secrets in repo**                      | Credential exposure                | `.env` gitignored; platform secret store in prod                                                                                                                          |
-| **Insufficient audit trail**             | Compliance failure                 | Memory CRUD, auth/API-key lifecycle events, and admin job replays are logged with correlation ID, action, entity, and safe payload metadata; audit writes are best-effort |
+| Threat                                   | Impact                             | Mitigation                                                                                                                                                                                                                 |
+| ---------------------------------------- | ---------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Prompt injection** via stored memories | LLM executes attacker instructions | Delimited context blocks; system prompt treats retrieved data as untrusted; eval suite tests injection cases                                                                                                               |
+| **Cross-tenant data access**             | User A reads User B's memories     | All queries scoped by `user_id` from JWT/API key; repository enforces ownership                                                                                                                                            |
+| **API key leakage**                      | Full account access                | Keys stored hashed; shown once at creation; rotation via delete + reissue                                                                                                                                                  |
+| **Rate abuse / DoS**                     | Service degradation                | Redis-backed limits keyed by JWT user, API-key ID, or client IP; named expensive limit for chat/search; in-memory fallback                                                                                                 |
+| **SQL injection**                        | Data breach                        | Prisma parameterized queries; no raw SQL without review                                                                                                                                                                    |
+| **Duplicate writes on retry**            | Duplicate memories or chat turns   | Durable `chat_turns` with atomic start/finalize and lock-guarded retries; `(turn_id, content_hash)` memory uniqueness; optional `Idempotency-Key` replay; deterministic BullMQ job IDs + `memory_index_states` hash guards |
+| **Stale vector leakage after delete**    | Deleted memory still searchable    | Delete job + scheduled reconciler with Postgres existence check; document brief consistency window                                                                                                                         |
+| **Secrets in repo**                      | Credential exposure                | `.env` gitignored; platform secret store in prod                                                                                                                                                                           |
+| **Insufficient audit trail**             | Compliance failure                 | Memory CRUD, auth/API-key lifecycle events, and admin job replays are logged with correlation ID, action, entity, and safe payload metadata; audit writes are best-effort                                                  |
 
 ### 9.4 Auth Boundaries
 
@@ -872,8 +962,9 @@ smriti-2.0/
 | `reconcile-vectors`        | BullMQ scheduler (default 15 min) | BullMQ scheduler ID `reconcile-vectors`        | 1                                       |
 | `cleanup-idempotency-keys` | BullMQ scheduler (default 60 min) | BullMQ scheduler ID `cleanup-idempotency-keys` | 1                                       |
 | `cleanup-job-failures`     | BullMQ scheduler (default 60 min) | BullMQ scheduler ID `cleanup-job-failures`     | 1                                       |
+| `cleanup-chat-turns`       | BullMQ scheduler (default 60 min) | BullMQ scheduler ID `cleanup-chat-turns`       | 1                                       |
 
-The reconciler runs in the worker. It can force re-enqueue a memory whose job ID is terminal (`completed` or `failed`); active/waiting/delayed jobs are left untouched. `embed-and-index` and `delete-vectors` use the configured attempts/backoff and retain completed/failed BullMQ jobs according to `JOB_REMOVE_ON_COMPLETE`/`JOB_REMOVE_ON_FAIL`. When those jobs exhaust their attempts, the worker persists a durable `job_failures` row; admins can list and replay it, which writes a `job.retry` audit event. The failure cleanup scheduler deletes rows older than `JOB_FAILURE_RETENTION_DAYS`; the idempotency cleanup scheduler deletes expired idempotency rows. There is no automatic DLQ consumer in v1: replay is admin-initiated.
+The reconciler runs in the worker. It can force re-enqueue a memory whose job ID is terminal (`completed` or `failed`); active/waiting/delayed jobs are left untouched. `embed-and-index` and `delete-vectors` use the configured attempts/backoff and retain completed/failed BullMQ jobs according to `JOB_REMOVE_ON_COMPLETE`/`JOB_REMOVE_ON_FAIL`. When those jobs exhaust their attempts, the worker persists a durable `job_failures` row; admins can list and replay it, which writes a `job.retry` audit event. The failure cleanup scheduler deletes rows older than `JOB_FAILURE_RETENTION_DAYS`; the idempotency cleanup scheduler deletes expired idempotency rows; the chat-turn cleanup scheduler deletes turns older than `CHAT_TURN_RETENTION_DAYS` (messages and memories survive with `turn_id = NULL`). There is no automatic DLQ consumer in v1: replay is admin-initiated.
 
 ---
 
@@ -895,6 +986,9 @@ Pino emits structured JSON logs in the API and worker. The API correlation ID co
 | `smriti_bullmq_job_duration_seconds`   | histogram | `queue`, `job`, `status`    | Worker `completed` / `failed` events |
 | `smriti_job_terminal_failures_total`   | counter   | `queue`, `job`              | Worker terminal-failure persistence  |
 | `smriti_job_manual_retries_total`      | counter   | `queue`, `job`              | API admin replay                     |
+| `smriti_chat_turns_total`              | counter   | `status`                    | API chat completion/failure          |
+| `smriti_chat_turn_duration_seconds`    | histogram | `status`                    | API chat completion/failure          |
+| `smriti_chat_turn_retries_total`       | counter   | `outcome`                   | API turn retry endpoint              |
 | `smriti_process_*`, `smriti_nodejs_*`  | mixed     | process/runtime             | `prom-client` default collectors     |
 
 HTTP route labels use the Express route template, not the raw URL; unmatched requests use `route="unmatched"`. This bounds label cardinality. The API skips recording `GET /metrics` itself, and the default collectors are disabled under `NODE_ENV=test`/Vitest to avoid prom-client's event-loop timer in tests. Histogram buckets cover 5 ms through 10 s.
@@ -907,20 +1001,21 @@ HTTP route labels use the Express route template, not the raw URL; unmatched req
 
 ## 13. Testing Strategy
 
-| Layer          | Tool                          | Scope                                                                           |
-| -------------- | ----------------------------- | ------------------------------------------------------------------------------- |
-| Domain         | Vitest + fakes                | Aggregate invariants, chunking, point IDs                                       |
-| Application    | Vitest + fake ports           | Use cases, chat graph (remember/recall/dedup), embedding/reconcile handlers     |
-| Repositories   | Vitest + in-memory fakes      | Repository port behavior; no Prisma adapter integration suite yet               |
-| API            | Supertest + Postgres          | Auth, memory CRUD/search/dedup, chat/conversations; skipped without Postgres    |
-| Jobs           | Vitest + fake ports           | Embed/index, stale-chunk pruning, reconcile handlers; no worker-process test    |
-| Job resilience | Vitest + Supertest + Postgres | Durable failure persistence, admin list/retry, audit, replay metrics, retention |
-| Agent loop     | `pnpm eval` gate              | Harness policy, tools, injection, retry/resume                                  |
-| Chat suite     | `pnpm eval` gate              | Remember, recall, dedup, general chat, conversation writes                      |
-| Idempotency    | Vitest + fake/Postgres        | Replay, payload mismatch, in-progress conflict, abort, expiry                   |
-| Security       | Vitest + Supertest            | Per-user/per-key throttling, expensive-route policy, 429 shape, auth audit      |
-| Observability  | Vitest + Supertest            | Metric rendering, bounded HTTP route labels, scrape exclusion                   |
-| Live models    | `pnpm eval:live` (DMR)        | Local exploration only; never gates CI                                          |
+| Layer           | Tool                          | Scope                                                                                 |
+| --------------- | ----------------------------- | ------------------------------------------------------------------------------------- |
+| Domain          | Vitest + fakes                | Aggregate invariants, chunking, point IDs                                             |
+| Application     | Vitest + fake ports           | Use cases, chat graph (remember/recall/dedup), embedding/reconcile handlers           |
+| Repositories    | Vitest + in-memory fakes      | Repository port behavior; no Prisma adapter integration suite yet                     |
+| API             | Supertest + Postgres          | Auth, memory CRUD/search/dedup, chat/conversations; skipped without Postgres          |
+| Jobs            | Vitest + fake ports           | Embed/index, stale-chunk pruning, reconcile handlers; no worker-process test          |
+| Job resilience  | Vitest + Supertest + Postgres | Durable failure persistence, admin list/retry, audit, replay metrics, retention       |
+| Agent loop      | `pnpm eval` gate              | Harness policy, tools, injection, retry/resume                                        |
+| Chat suite      | `pnpm eval` gate              | Remember, recall, dedup, general chat, conversation writes                            |
+| Idempotency     | Vitest + fake/Postgres        | Replay, payload mismatch, in-progress conflict, abort, expiry                         |
+| Chat durability | Vitest + fake/Postgres        | Turn start/finalize, failure shape, retry, replay, attempt cap, per-turn memory reuse |
+| Security        | Vitest + Supertest            | Per-user/per-key throttling, expensive-route policy, 429 shape, auth audit            |
+| Observability   | Vitest + Supertest            | Metric rendering, bounded HTTP route labels, scrape exclusion                         |
+| Live models     | `pnpm eval:live` (DMR)        | Local exploration only; never gates CI                                                |
 
 `pnpm test` runs unit/application tests and the API e2e suite when Postgres is reachable. The memory/chat API specs replace embeddings, the job queue, and Qdrant with fakes; the chat spec also supplies a fake `ChatModel`. When Postgres is unavailable the suite is skipped. CI runs format check, lint, typecheck, migrations, tests, the deterministic eval gate, and Docker image builds, with Postgres and Redis service containers (no Qdrant).
 
@@ -938,4 +1033,5 @@ HTTP route labels use the Express route template, not the raw URL; unmatched req
 - [ADR-008: Agent harness and eval gate](../adr/ADR-008-agent-harness-eval-gate.md)
 - [ADR-009: LangGraph chat orchestration](../adr/ADR-009-langgraph-chat-orchestration.md)
 - [ADR-010: Request idempotency](../adr/ADR-010-request-idempotency.md)
+- [ADR-011: Chat turn durability](../adr/ADR-011-chat-turn-durability.md)
 - [OpenAPI contract](../api/openapi.json)

@@ -46,13 +46,13 @@ Routing:
 
 ### Conversation persistence
 
-`ConversationRepository` is a domain port with Prisma and in-memory adapters. `POST /v1/chat` loads at most 20 history messages, persists the user message before running the graph, and persists the assistant message after. Conversation reads are user-scoped.
+`ConversationRepository` is a domain port with Prisma and in-memory adapters. `POST /v1/chat` loads at most 20 history messages, excluding messages written by the current turn. The user message is written atomically with a durable `chat_turns` row before the graph runs, and the assistant message is written atomically with the turn's `completed` status afterwards. Conversation reads are user-scoped.
 
-### Synchronous with request idempotency
+### Synchronous with durable turns and request idempotency
 
-`POST /v1/chat` is synchronous: it returns the assistant message and side-effect IDs in the same response. An optional `Idempotency-Key` is handled by the API interceptor around the whole turn, so a retry of a successful request replays the stored response instead of writing another user/assistant pair. The graph itself remains unaware of idempotency.
+`POST /v1/chat` is synchronous: it returns the assistant message, `turnId`, and side-effect IDs in the same response. An optional `Idempotency-Key` is handled by the API interceptor around the whole turn, so a retry of a successful request replays the stored response instead of writing another user/assistant pair. The graph itself remains unaware of idempotency, but it receives the `turnId` for per-turn memory reuse.
 
-The turn is still not transactional across the user message, graph side effects, and assistant message. If the request fails after the user message is persisted, that message remains and a retry creates a new turn.
+A failed graph marks the turn `failed` and returns `CHAT_TURN_FAILED` with the turn ID. The user message remains part of the durable turn and is reused by an explicit retry or by repeating the same `Idempotency-Key`. Retries reuse memories already written by the turn and append the assistant message at most once. The graph run itself is not transactional and there is no checkpointer; see [ADR-011](ADR-011-chat-turn-durability.md).
 
 ### Duplicate detection
 
@@ -73,11 +73,12 @@ The `persist` node reuses the same semantic dedup rule as REST (`DEDUP_SIMILARIT
 - The graph makes two sequential model calls per turn; latency includes classification and generation.
 - No stream, checkpointing, or tool loop in v1.
 - A malformed classification gets a heuristic fallback, which may miss nuanced memory extraction.
+- A retry re-runs the graph from the persisted user message, so model calls are not deduplicated.
 
 ### Deferred
 
 - Streaming responses.
-- Turn-level transactions across user message, graph side effects, and assistant message.
 - LangGraph checkpoints/resume.
+- Mid-graph resume; v1.5 recovers at the turn boundary only.
 - Conversation title generation, listing, and deletion endpoints.
 - Automatic duplicate merging.

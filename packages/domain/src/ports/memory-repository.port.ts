@@ -19,6 +19,7 @@ export interface MemoryRepository {
   findById(userId: string, id: string): Promise<Memory | null>;
   findByUser(userId: string, query: ListMemoriesQuery): Promise<PaginatedResult<Memory>>;
   findAll(cursor: string | undefined, limit: number): Promise<PaginatedResult<Memory>>;
+  findByTurnId(turnId: string): Promise<Memory[]>;
   existsByIds(ids: string[]): Promise<Set<string>>;
   update(memory: Memory): Promise<void>;
   delete(userId: string, id: string): Promise<boolean>;

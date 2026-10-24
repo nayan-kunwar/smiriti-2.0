@@ -9,6 +9,7 @@ import type {
   MemoryRepository,
   VectorStore,
 } from '@smriti/domain';
+import { computeContentHash } from '@smriti/domain';
 import { createMemory } from '../commands/create-memory.command.js';
 import { searchMemories } from '../queries/search-memories.query.js';
 import type { ScoredMemoryDto } from '../queries/search-memories.query.js';
@@ -47,6 +48,7 @@ async function bestEffort<T>(promise: Promise<T>, fallback: T, timeoutMs: number
 }
 
 const ChatState = Annotation.Root({
+  turnId: Annotation<string>,
   userId: Annotation<string>,
   conversationId: Annotation<string>,
   correlationId: Annotation<string>,
@@ -236,7 +238,24 @@ export function createChatGraph(deps: ChatGraphDeps) {
     const createdContents: string[] = [];
     const warnings: DuplicateWarning[] = [];
 
+    // A retry re-runs the graph. Memories already written by this turn are
+    // reused by content hash instead of being created (or reported as
+    // duplicates) a second time.
+    const existingByHash = new Map(
+      (await memoryRepository.findByTurnId(state.turnId)).map((memory) => [
+        memory.contentHash,
+        memory,
+      ]),
+    );
+
     for (const extracted of state.extractedMemories) {
+      const alreadyCreated = existingByHash.get(computeContentHash(extracted.content.trim()));
+      if (alreadyCreated) {
+        created.push(alreadyCreated.id);
+        createdContents.push(alreadyCreated.content);
+        continue;
+      }
+
       let duplicate: ScoredMemoryDto | null = null;
       try {
         const found = await bestEffort(
@@ -271,7 +290,7 @@ export function createChatGraph(deps: ChatGraphDeps) {
           jobQueue: deps.jobQueue,
           indexStateStore: deps.indexStateStore,
         },
-        { userId: state.userId, correlationId: state.correlationId },
+        { userId: state.userId, correlationId: state.correlationId, turnId: state.turnId },
         {
           type: extracted.type,
           content: extracted.content,

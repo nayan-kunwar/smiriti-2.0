@@ -2,7 +2,7 @@
 
 Agentic memory assistant with a hexagonal memory pipeline: Postgres as the source of truth, asynchronous Qdrant indexing, BullMQ workers, and configurable embedding/chat providers.
 
-**Status:** v1 is implemented: memory CRUD, auth, per-principal rate limiting, auth/API-key audit events, semantic search, async indexing, reconciliation, durable terminal job failures with admin replay, REST/chat dedup, request idempotency for memory/chat writes, Prometheus metrics, and the synchronous LangGraph `/v1/chat` slice.
+**Status:** v1.5 is implemented: memory CRUD, auth, per-principal rate limiting, auth/API-key audit events, semantic search, async indexing, reconciliation, durable terminal job failures with admin replay, REST/chat dedup, request idempotency for memory/chat writes, durable and retry-safe chat turns, Prometheus metrics, and the synchronous LangGraph `/v1/chat` slice.
 
 ## What works
 
@@ -14,8 +14,9 @@ Agentic memory assistant with a hexagonal memory pipeline: Postgres as the sourc
 - Per-provider Qdrant collections and fail-fast dimension checks.
 - Stale-chunk pruning and scheduled reconciliation for missed jobs, stale indexes, and orphan vectors.
 - LangGraph chat that classifies intent, extracts and stores memories, retrieves context, and persists both sides of a conversation.
+- Durable chat turns: the user message and turn record commit together, the assistant message and `completed` status commit together, and failed turns can be inspected or retried without duplicating messages or memories.
 - Detect-only dedup for REST creates (`409`) and chat turns (skip persist + warning), with `?force=true` override.
-- Optional `Idempotency-Key` replay for `POST /v1/memories` and `POST /v1/chat`.
+- Optional `Idempotency-Key` replay for `POST /v1/memories` and `POST /v1/chat`; reusing the key after a failed turn resumes that turn.
 - Prometheus metrics for API latency/status and worker job throughput/failures.
 - Deterministic agent-loop and chat eval gate plus a local-only live model runner.
 
@@ -142,6 +143,18 @@ curl -H "Authorization: Bearer $TOKEN" \
 
 Chat skips persisting an extracted memory when a similar memory already exists and returns `duplicateWarnings` instead.
 
+Every turn is recorded in `chat_turns`, and the response includes its `turnId`. Inspect a turn or retry a failed one:
+
+```bash
+curl -H "Authorization: Bearer $TOKEN" \
+  http://localhost:3000/v1/chat/turns/<turn-id>
+
+curl -X POST -H "Authorization: Bearer $TOKEN" \
+  http://localhost:3000/v1/chat/turns/<turn-id>/retry
+```
+
+If the graph fails after the user message is persisted, `POST /v1/chat` returns `500` with `code: "CHAT_TURN_FAILED"`, `turnId`, `conversationId`, and `retryable: true`. A retry reuses the stored user message, reuses memories already written by that turn (keyed by `(turn_id, content_hash)`), and appends the assistant message exactly once. Retries are capped at `CHAT_TURN_MAX_ATTEMPTS` (default 5); a completed turn replays its stored result instead of re-running the graph.
+
 ## Idempotent writes
 
 Send an optional `Idempotency-Key` header on memory creation or a chat turn. Repeating the same key with the same payload returns the original response instead of writing again:
@@ -160,12 +173,19 @@ curl -X POST http://localhost:3000/v1/chat \
 - Only successful responses are stored; failed requests release the key.
 - Keys expire after `IDEMPOTENCY_TTL_HOURS` (default 24 hours); the worker deletes expired rows every `IDEMPOTENCY_CLEANUP_INTERVAL_MINUTES` (default 60).
 - The in-progress reservation uses `IDEMPOTENCY_LOCK_TIMEOUT_MS` (default 30 seconds).
-- Chat still has no transaction across user message, graph, and assistant message; a crash after partial persistence can leave partial history.
+- Reusing the key after a failed chat turn resumes the durable turn instead of creating a second one. A different message with the same key returns `409` with `code: "CHAT_TURN_KEY_REUSE"`.
+- Chat turns are atomic at both ends: the user message commits with the turn, and the assistant message commits with the `completed` status. An execution lock and attempt cap prevent a stale worker from appending a second assistant message.
+- Turns are retained for `CHAT_TURN_RETENTION_DAYS` (default 30); cleanup deletes old turn rows while keeping messages and memories (their `turn_id` becomes `NULL`).
 
 ```bash
 IDEMPOTENCY_TTL_HOURS=24
 IDEMPOTENCY_LOCK_TIMEOUT_MS=30000
 IDEMPOTENCY_CLEANUP_INTERVAL_MINUTES=60
+
+CHAT_TURN_LOCK_TIMEOUT_MS=300000
+CHAT_TURN_MAX_ATTEMPTS=5
+CHAT_TURN_RETENTION_DAYS=30
+CHAT_TURN_CLEANUP_INTERVAL_MINUTES=60
 ```
 
 API keys can be issued with `POST /v1/api-keys` and used as `Authorization: Bearer smriti_...` or `X-API-Key`. See the [architecture document](docs/architecture/v1-architecture.md) for the full contract.
@@ -274,6 +294,9 @@ Metrics use bounded labels only. HTTP routes use the Express route template (`/v
 - `smriti_bullmq_job_duration_seconds{queue,job,status}`
 - `smriti_job_terminal_failures_total{queue,job}`
 - `smriti_job_manual_retries_total{queue,job}`
+- `smriti_chat_turns_total{status}`
+- `smriti_chat_turn_duration_seconds{status}`
+- `smriti_chat_turn_retries_total{outcome}`
 
 The default process/Node.js metrics are prefixed with `smriti_`. Metrics endpoints should be reachable only from the monitoring network; they have no application-level auth. The Prometheus scrape itself is excluded from the HTTP metrics.
 

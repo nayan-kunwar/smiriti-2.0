@@ -3,6 +3,8 @@ import { collectDefaultMetrics, Counter, Histogram, Registry } from 'prom-client
 const HTTP_LABELS = ['method', 'route', 'status'] as const;
 const JOB_LABELS = ['queue', 'job', 'status'] as const;
 const JOB_FAILURE_LABELS = ['queue', 'job'] as const;
+const CHAT_TURN_LABELS = ['status'] as const;
+const CHAT_TURN_RETRY_LABELS = ['outcome'] as const;
 
 const LATENCY_BUCKETS = [0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10];
 
@@ -23,6 +25,9 @@ export class Metrics {
   private readonly jobDuration: Histogram<(typeof JOB_LABELS)[number]>;
   private readonly terminalJobFailures: Counter<(typeof JOB_FAILURE_LABELS)[number]>;
   private readonly manualJobRetries: Counter<(typeof JOB_FAILURE_LABELS)[number]>;
+  private readonly chatTurns: Counter<(typeof CHAT_TURN_LABELS)[number]>;
+  private readonly chatTurnDuration: Histogram<(typeof CHAT_TURN_LABELS)[number]>;
+  private readonly chatTurnRetries: Counter<(typeof CHAT_TURN_RETRY_LABELS)[number]>;
 
   constructor(options: MetricsOptions = {}) {
     this.registry.setDefaultLabels({ service: 'smriti' });
@@ -69,6 +74,25 @@ export class Metrics {
       labelNames: JOB_FAILURE_LABELS,
       registers: [this.registry],
     });
+    this.chatTurns = new Counter({
+      name: 'smriti_chat_turns_total',
+      help: 'Chat turns that reached a terminal state.',
+      labelNames: CHAT_TURN_LABELS,
+      registers: [this.registry],
+    });
+    this.chatTurnDuration = new Histogram({
+      name: 'smriti_chat_turn_duration_seconds',
+      help: 'Chat turn execution duration in seconds.',
+      labelNames: CHAT_TURN_LABELS,
+      buckets: LATENCY_BUCKETS,
+      registers: [this.registry],
+    });
+    this.chatTurnRetries = new Counter({
+      name: 'smriti_chat_turn_retries_total',
+      help: 'Manual chat turn retries by outcome.',
+      labelNames: CHAT_TURN_RETRY_LABELS,
+      registers: [this.registry],
+    });
   }
 
   get contentType(): string {
@@ -106,6 +130,16 @@ export class Metrics {
 
   observeManualJobRetry(queue: string, job: string): void {
     this.manualJobRetries.inc({ queue, job });
+  }
+
+  observeChatTurn(status: 'completed' | 'failed', durationSeconds: number): void {
+    const labels = { status };
+    this.chatTurns.inc(labels);
+    this.chatTurnDuration.observe(labels, durationSeconds);
+  }
+
+  observeChatTurnRetry(outcome: 'completed' | 'failed' | 'replayed' | 'conflict'): void {
+    this.chatTurnRetries.inc({ outcome });
   }
 
   reset(): void {

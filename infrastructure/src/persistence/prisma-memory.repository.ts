@@ -15,6 +15,7 @@ function toDomain(record: PrismaMemory): Memory {
     isPinned: record.isPinned,
     isArchived: record.isArchived,
     conversationId: record.conversationId,
+    turnId: record.turnId,
     contentHash: record.contentHash,
     createdAt: record.createdAt,
     updatedAt: record.updatedAt,
@@ -39,6 +40,7 @@ export class PrismaMemoryRepository implements MemoryRepository {
         isPinned: props.isPinned,
         isArchived: props.isArchived,
         conversationId: props.conversationId,
+        turnId: props.turnId,
         contentHash: props.contentHash,
         createdAt: props.createdAt,
         updatedAt: props.updatedAt,
@@ -89,6 +91,14 @@ export class PrismaMemoryRepository implements MemoryRepository {
       items: page.map(toDomain),
       nextCursor: hasMore ? page[page.length - 1].id : null,
     };
+  }
+
+  async findByTurnId(turnId: string): Promise<Memory[]> {
+    const records = await this.prisma.memory.findMany({
+      where: { turnId },
+      orderBy: { createdAt: 'asc' },
+    });
+    return records.map(toDomain);
   }
 
   async findAll(cursor: string | undefined, limit: number): Promise<PaginatedResult<Memory>> {
